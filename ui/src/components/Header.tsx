@@ -17,8 +17,16 @@ export function Header({ health, offline }: { health: Health | null; offline: bo
 
         <div className="ml-auto flex items-center gap-2.5 font-mono text-[10px] uppercase tracking-[0.12em]">
           {health && (
-            <span className="hidden text-faint sm:inline">
-              pool {health.pool_size} cards
+            <span
+              className="hidden text-faint sm:inline"
+              title={
+                `${health.pool_size} cards the frozen Pilot can represent; ` +
+                `${health.main_deck_pool_size} of them can go in a main deck. ` +
+                'The rest are Tokens and Extra Deck monsters it only has to recognise.'
+              }
+            >
+              pool {health.main_deck_pool_size}/{health.pool_size} · banlist{' '}
+              {health.banlist}
             </span>
           )}
           <span

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Panel } from '@/components/ui/Panel'
+import type { Deck, DeckReport } from '@/lib/api'
 
 const FIELD =
   'w-full rounded-md border border-line bg-panel-2 px-3 py-2 font-mono text-sm tabular ' +
@@ -9,26 +10,39 @@ const FIELD =
 export function SubmitPanel({
   onSubmit,
   busy,
+  report,
 }: {
-  onSubmit: (body: { mutations: number; screening_duels: number }) => Promise<void>
+  onSubmit: (body: {
+    deck?: Deck | null
+    mutations: number
+    screening_duels: number
+  }) => Promise<void>
   busy: boolean
+  report: DeckReport | null
 }) {
   const [mutations, setMutations] = useState(25)
   const [duels, setDuels] = useState(100)
 
+  const hasDeck = report !== null
+  const blocked = hasDeck && !report.legal
+
   return (
-    <Panel title="Refine a deck">
+    <Panel title="Refine">
       <form
         className="space-y-4 p-4"
         onSubmit={(e) => {
           e.preventDefault()
-          void onSubmit({ mutations, screening_duels: duels })
+          void onSubmit({
+            deck: report?.deck ?? null,
+            mutations,
+            screening_duels: duels,
+          })
         }}
       >
         <p className="text-sm leading-relaxed text-muted">
-          Submits a random legal deck from the supported pool and mutates it swap by
-          swap, keeping any swap with a positive Delta score. Deck input lands in the
-          next slice.
+          {hasDeck
+            ? 'Mutates the deck above swap by swap, keeping any swap with a positive Delta score. Every swap is drawn from inside the Masked action space, so the deck stays legal at every step.'
+            : 'With no deck pasted, this refines a random legal deck drawn from the 408 main-deck cards the Pilot can play.'}
         </p>
 
         <div className="grid grid-cols-2 gap-3">
@@ -61,13 +75,23 @@ export function SubmitPanel({
           </label>
         </div>
 
-        <Button type="submit" disabled={busy} className="w-full">
-          {busy ? 'Submitting…' : 'Queue refine job'}
+        <Button type="submit" disabled={busy || blocked} className="w-full">
+          {busy ? 'Submitting…' : hasDeck ? 'Queue refine job' : 'Queue on a random deck'}
         </Button>
-        <p className="text-xs leading-relaxed text-faint">
-          The queue is single-slot: one job runs at a time because the duel farm already
-          saturates every core. You get a queue position, not a spinner.
-        </p>
+
+        {blocked ? (
+          <p className="text-xs leading-relaxed text-bad">
+            The deck above is not legal, so it will not be queued.{' '}
+            <code className="font-mono">ygopro-core</code> kills the process on a
+            malformed deck rather than refusing it, so illegality is caught here, never
+            at duel time.
+          </p>
+        ) : (
+          <p className="text-xs leading-relaxed text-faint">
+            The queue is single-slot: one job runs at a time because the duel farm
+            already saturates every core. You get a queue position, not a spinner.
+          </p>
+        )}
       </form>
     </Panel>
   )

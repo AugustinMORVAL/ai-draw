@@ -13,6 +13,85 @@ export interface Deck {
   main: number[]
 }
 
+export type CardSection = 'main' | 'extra' | 'token'
+
+export interface Card {
+  code: number
+  name: string
+  kind: string
+  subtypes: string[]
+  section: CardSection
+  race: string | null
+  attribute: string | null
+  level: number | null
+  atk: number | null
+  defense: number | null
+  limit: number
+  /** Stated by the server, never inferred here: can the frozen Pilot represent it? */
+  in_pool: boolean
+}
+
+export type CardIssue =
+  | 'unknown_card'
+  | 'not_in_pool'
+  | 'forbidden'
+  | 'over_limit'
+  | 'token'
+  | 'wrong_section'
+
+export type DeckIssue =
+  | 'main_too_small'
+  | 'main_too_large'
+  | 'extra_too_large'
+  | 'nothing_parsed'
+
+export interface CardFlag {
+  code: number
+  name: string | null
+  count: number
+  section: CardSection
+  issue: CardIssue
+  reason: string
+  limit: number | null
+}
+
+export interface DeckFlag {
+  issue: DeckIssue
+  reason: string
+}
+
+export interface UnresolvedLine {
+  line: number
+  text: string
+  reason: string
+}
+
+export interface DeckEntry {
+  card: Card
+  count: number
+  section: CardSection
+}
+
+export interface MaskPreview {
+  pool_size: number
+  legal_picks: number
+  masked: { reason: string; count: number }[]
+}
+
+export interface DeckReport {
+  deck: Deck | null
+  extra: number[]
+  legal: boolean
+  banlist: string
+  entries: DeckEntry[]
+  flags: CardFlag[]
+  deck_flags: DeckFlag[]
+  unresolved: UnresolvedLine[]
+  mask: MaskPreview
+  main_count: number
+  extra_count: number
+}
+
 export interface Swap {
   step: number
   card_out: number
@@ -56,6 +135,8 @@ export interface Health {
   live: boolean
   executor: string
   pool_size: number
+  main_deck_pool_size: number
+  banlist: string
   version: string
 }
 
@@ -77,7 +158,17 @@ export const api = {
   health: () => request<Health>('/health'),
   jobs: () => request<Job[]>('/jobs'),
   job: (id: string) => request<Job>(`/jobs/${id}`),
-  submitRefine: (body: { mutations: number; screening_duels: number }) =>
-    request<Job>('/jobs/refine', { method: 'POST', body: JSON.stringify(body) }),
+  submitRefine: (body: {
+    deck?: Deck | null
+    mutations: number
+    screening_duels: number
+  }) => request<Job>('/jobs/refine', { method: 'POST', body: JSON.stringify(body) }),
+  searchCards: (q: string, limit = 12) =>
+    request<Card[]>(`/cards?q=${encodeURIComponent(q)}&limit=${limit}`),
+  parseDeck: (text: string) =>
+    request<DeckReport>('/decks/parse', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
   cancel: (id: string) => request<Job>(`/jobs/${id}/cancel`, { method: 'POST' }),
 }

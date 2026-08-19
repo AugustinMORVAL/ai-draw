@@ -10,11 +10,9 @@ from __future__ import annotations
 import random
 from collections.abc import Awaitable, Callable
 
+from .cards import card_index
 from .executor import DuelExecutor, _hash_unit
 from .models import Deck, Fidelity, Progress, RefineParams, RefineResult, Swap
-from .pool import supported_pool
-
-MAX_COPIES = 3
 
 Report = Callable[[Progress], Awaitable[None]]
 ShouldCancel = Callable[[], Awaitable[bool]]
@@ -25,14 +23,20 @@ class Cancelled(Exception):
 
 
 def random_deck(size: int = 40, *, seed: int | None = None) -> Deck:
-    """A legal-by-copy-count deck drawn from the supported pool. Not a good deck."""
+    """A legal deck drawn from the supported pool. Legal, not good.
+
+    Draws from `main_deck_codes()`, not the raw 864: over half the pool is Tokens
+    and Extra Deck monsters that exist so the Pilot can recognise them on the field.
+    Putting one in a main deck does not make a weak deck, it aborts `ygopro-core`.
+    """
     rng = random.Random(seed)
-    pool = supported_pool()
+    index = card_index()
+    codes = index.main_deck_codes()
     main: list[int] = []
     counts: dict[int, int] = {}
     while len(main) < size:
-        code = rng.choice(pool)
-        if counts.get(code, 0) >= MAX_COPIES:
+        code = rng.choice(codes)
+        if counts.get(code, 0) >= index.pool[code].limit:
             continue
         counts[code] = counts.get(code, 0) + 1
         main.append(code)
@@ -40,19 +44,20 @@ def random_deck(size: int = 40, *, seed: int | None = None) -> Deck:
 
 
 def _propose(deck: Deck, step: int) -> tuple[int, int]:
-    """Pick one card to cut and one to add, keeping the copy limit intact."""
-    pool = supported_pool()
+    """Pick one card to cut and one to add, from inside the Masked action space."""
+    index = card_index()
+    codes = index.main_deck_codes()
     out_index = int(_hash_unit(deck.main, step, "out") * len(deck.main))
     card_out = deck.main[out_index]
     counts: dict[int, int] = {}
     for code in deck.main:
         counts[code] = counts.get(code, 0) + 1
-    offset = int(_hash_unit(deck.main, step, "in") * len(pool))
-    for i in range(len(pool)):
-        card_in = pool[(offset + i) % len(pool)]
+    offset = int(_hash_unit(deck.main, step, "in") * len(codes))
+    for i in range(len(codes)):
+        card_in = codes[(offset + i) % len(codes)]
         if card_in == card_out:
             continue
-        if counts.get(card_in, 0) < MAX_COPIES:
+        if counts.get(card_in, 0) < index.pool[card_in].limit:
             return card_out, card_in
     raise RuntimeError("no legal card to add from the supported pool")
 

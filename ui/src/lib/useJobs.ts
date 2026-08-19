@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, type Health, type Job } from '@/lib/api'
+import { api, type Deck, type Health, type Job } from '@/lib/api'
 
 const POLL_MS = 700
 
@@ -47,14 +47,18 @@ export function useJobs() {
   }, [refresh])
 
   const submitRefine = useCallback(
-    async (body: { mutations: number; screening_duels: number }) => {
+    async (body: {
+      deck?: Deck | null
+      mutations: number
+      screening_duels: number
+    }) => {
       setError(null)
       try {
         const job = await api.submitRefine(body)
         await refresh()
         return job
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+        setError(submitMessage(e))
         return null
       }
     },
@@ -74,4 +78,23 @@ export function useJobs() {
   )
 
   return { jobs, health, offline, error, submitRefine, cancel, refresh }
+}
+
+/**
+ * A 422 from the queue carries the same deck report the paste box already shows,
+ * so surface the first reason rather than a wall of JSON.
+ */
+function submitMessage(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e)
+  const start = raw.indexOf('{')
+  if (start === -1) return raw
+  try {
+    const body = JSON.parse(raw.slice(start)) as {
+      detail?: { flags?: { reason: string }[]; deck_flags?: { reason: string }[] }
+    }
+    const reason = body.detail?.flags?.[0]?.reason ?? body.detail?.deck_flags?.[0]?.reason
+    return reason ? `Deck refused: ${reason}` : raw
+  } catch {
+    return raw
+  }
 }

@@ -38,6 +38,124 @@ class Deck(BaseModel):
     main: list[int] = Field(min_length=1)
 
 
+class CardSection(str, Enum):
+    """Where a card may be put. A Token may be put nowhere -- it is only ever made."""
+
+    MAIN = "main"
+    EXTRA = "extra"
+    TOKEN = "token"
+
+
+class Card(BaseModel):
+    """One card, as the app shows it. `in_pool` is stated, never inferred."""
+
+    code: int
+    name: str
+    kind: str
+    subtypes: list[str] = []
+    section: CardSection
+    race: str | None = None
+    attribute: str | None = None
+    level: int | None = None
+    atk: int | None = None
+    defense: int | None = None
+    limit: int = 3
+    in_pool: bool
+
+
+class CardIssue(str, Enum):
+    """Why one card in a pasted deck cannot be built with."""
+
+    UNKNOWN_CARD = "unknown_card"
+    NOT_IN_POOL = "not_in_pool"
+    FORBIDDEN = "forbidden"
+    OVER_LIMIT = "over_limit"
+    TOKEN = "token"
+    WRONG_SECTION = "wrong_section"
+
+
+class DeckIssue(str, Enum):
+    """Why the deck as a whole cannot be built with."""
+
+    MAIN_TOO_SMALL = "main_too_small"
+    MAIN_TOO_LARGE = "main_too_large"
+    EXTRA_TOO_LARGE = "extra_too_large"
+    NOTHING_PARSED = "nothing_parsed"
+
+
+class CardFlag(BaseModel):
+    """One card's problem, with the sentence a user should read."""
+
+    code: int
+    name: str | None
+    count: int
+    section: CardSection
+    issue: CardIssue
+    reason: str
+    limit: int | None = None
+
+
+class DeckFlag(BaseModel):
+    issue: DeckIssue
+    reason: str
+
+
+class UnresolvedLine(BaseModel):
+    """A pasted line that named no card at all."""
+
+    line: int
+    text: str
+    reason: str
+
+
+class DeckEntry(BaseModel):
+    """One distinct card in the pasted deck, with its count."""
+
+    card: Card
+    count: int
+    section: CardSection
+
+
+class MaskedGroup(BaseModel):
+    reason: str
+    count: int
+
+
+class MaskPreview(BaseModel):
+    """What the Builder could still pick, given this deck.
+
+    Masking is hard enforcement: an illegal pick is removed from the action space,
+    so an illegal deck is unrepresentable rather than rejected (CONTEXT.md). This is
+    that same mask, counted, so a user can see the Builder's real room to move.
+    """
+
+    pool_size: int
+    legal_picks: int
+    masked: list[MaskedGroup]
+
+
+class DeckReport(BaseModel):
+    """Everything the app knows about a pasted decklist."""
+
+    deck: Deck | None
+    extra: list[int] = []
+    legal: bool
+    banlist: str
+    entries: list[DeckEntry] = []
+    flags: list[CardFlag] = []
+    deck_flags: list[DeckFlag] = []
+    unresolved: list[UnresolvedLine] = []
+    mask: MaskPreview
+    main_count: int = 0
+    extra_count: int = 0
+
+
+class ParseDeck(BaseModel):
+    """A pasted decklist: `.ydk` codes, or names one per line with counts."""
+
+    text: str = Field(max_length=100_000)
+
+
 class Swap(BaseModel):
     """One accepted or rejected mutation, with its Delta score."""
 
@@ -97,4 +215,8 @@ class Health(BaseModel):
     live: bool
     executor: str
     pool_size: int
+    #: Of the pool, how many are main-deck cards. The rest are Tokens and Extra Deck
+    #: monsters the Pilot must recognise but no deck can be built from.
+    main_deck_pool_size: int
+    banlist: str
     version: str

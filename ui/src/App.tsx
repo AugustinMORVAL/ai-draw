@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
+import { DeckPanel } from '@/components/DeckPanel'
 import { Header } from '@/components/Header'
 import { JobDetail } from '@/components/JobDetail'
 import { JobList } from '@/components/JobList'
 import { SubmitPanel } from '@/components/SubmitPanel'
+import type { Deck } from '@/lib/api'
+import { useDeckReport } from '@/lib/useDeckReport'
 import { useJobs } from '@/lib/useJobs'
 
 /** The selected job lives in the URL, so a reload mid-job comes back to it. */
@@ -24,10 +27,16 @@ export default function App() {
   const { jobs, health, offline, error, submitRefine, cancel } = useJobs()
   const [selectedId, select] = useHashSelection()
   const [busy, setBusy] = useState(false)
+  const [deckText, setDeckText] = useState('')
+  const deck = useDeckReport(deckText)
 
   const selected = jobs.find((job) => job.id === selectedId) ?? null
 
-  const onSubmit = async (body: { mutations: number; screening_duels: number }) => {
+  const onSubmit = async (body: {
+    deck?: Deck | null
+    mutations: number
+    screening_duels: number
+  }) => {
     setBusy(true)
     const job = await submitRefine(body)
     setBusy(false)
@@ -38,9 +47,16 @@ export default function App() {
     <div className="min-h-svh">
       <Header health={health} offline={offline} />
 
-      <main className="mx-auto grid max-w-6xl gap-5 px-6 py-6 lg:grid-cols-[22rem_1fr]">
+      <main className="mx-auto grid max-w-7xl gap-5 px-6 py-6 lg:grid-cols-[26rem_1fr]">
         <div className="space-y-5">
-          <SubmitPanel onSubmit={onSubmit} busy={busy} />
+          <DeckPanel
+            text={deckText}
+            setText={(update) => setDeckText(update)}
+            report={deck.report}
+            pending={deck.pending}
+            error={deck.error}
+          />
+          <SubmitPanel onSubmit={onSubmit} busy={busy} report={deck.report} />
           <JobList jobs={jobs} selectedId={selectedId} onSelect={select} />
         </div>
 
@@ -54,9 +70,11 @@ export default function App() {
         </div>
       </main>
 
-      <footer className="mx-auto max-w-6xl px-6 pb-10 text-[11px] leading-relaxed text-faint">
-        Slice 0 — shell, executor seam, fake executor, durable job queue. Jobs survive a
-        reload and an API restart; the queue is single-slot by design (ADR-0005).
+      <footer className="mx-auto max-w-7xl px-6 pb-10 text-[11px] leading-relaxed text-faint">
+        Slice 1 — deck input: paste a decklist or search the card database, and see
+        every card checked against the 864 the frozen Pilot can represent, the copy
+        limit, and the {health?.banlist ?? '2024.7'} banlist. Legality is never a
+        Constraint: it is always enforced.
       </footer>
     </div>
   )

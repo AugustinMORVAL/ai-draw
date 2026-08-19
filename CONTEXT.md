@@ -7,7 +7,7 @@ RL-driven Yu-Gi-Oh! deckbuilding ecosystem: a Builder that constructs and refine
 ### Cards
 
 **Supported pool**:
-The 864 cards the frozen Pilot can represent — the codes of `embed864.pkl`, in that file's order, committed as `data/pilot-864/pool.txt`. The executor is fed a *different* file, `code_list.txt`, which is longer on purpose — its core aborts on any code it was never handed, including cards no deck plays — so *in the code list* never means *in the pool*; read `pool.txt` for pool questions. Every phase-1 card decision ranges over exactly these: the Builder's action space, the Damaged deck's replacement draws, and Warm-start's decklist filter. Widening it means training a new Pilot, not editing a file.
+The 864 cards the frozen Pilot can represent — the codes of `embed864.pkl`, in that file's order, committed as `data/pilot-864/pool.txt`. The executor is fed a *different* file, `code_list.txt`, which is longer on purpose — its core aborts on any code it was never handed, including cards no deck plays — so *in the code list* never means *in the pool*; read `pool.txt` for pool questions. Every phase-1 card decision ranges over exactly these: the Builder's action space, the Damaged deck's replacement draws, and Warm-start's decklist filter. Widening it means training a new Pilot, not editing a file. It is the Pilot's *vocabulary*, not a list of buildable cards: 232 of the 864 are Tokens and 221 are Extra Deck monsters, present so the Pilot can recognise them on the field. Only **411 are main-deck cards** — 408 once Legality has taken three — and that is the number the Builder actually picks from.
 _Avoid_: card pool, code list (ambiguous with the executor's 13,472-card ceiling, which is a phase-2 target)
 
 **Candidate deck**:
@@ -15,6 +15,10 @@ The deck currently under evaluation — the Builder's construct output or a muta
 _Avoid_: candidate (bare — ambiguous with a candidate *action* in the Builder's MDP)
 
 ### Constraints
+
+**Legality**:
+The rules a deck must satisfy no matter what anyone asked for: the banlist, the 3-copy limit, main-deck size 40-60, Extra Deck at most 15, and — unique to this project — **membership of the Supported pool**, since a code outside the 864 is a card the Pilot cannot see. The banlist is the OCG **2024.7** list, the one in force when the Pilot's pool was frozen, not the current one; judging a 2024 pool against a 2026 list would forbid cards these decks were built to play. Enforced by Masking, never negotiated. `ygopro-core` aborts the process on a malformed deck rather than refusing it, so an illegal deck is a dead worker, not a bad result.
+_Avoid_: validation, deck rules (says nothing about which rules), banlist (only one of the five)
 
 **Constraint**:
 A user-supplied restriction on deck composition (e.g. "max 20 Cyberse-type cards", "budget ≤ N"). Distinct from *Legality* — banlist, copy limits, and deck-size rules are not Constraints, they are always enforced.
