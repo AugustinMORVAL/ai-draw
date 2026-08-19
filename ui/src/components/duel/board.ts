@@ -7,14 +7,21 @@
  * state that has to be kept in sync.
  *
  * Where a card lands is decided by the card itself, not by the verb in the log: a
- * Spell goes to the spell row because the index says it is a Spell. The log's verb
- * is a sentence for a human, the card's type is data.
+ * Spell goes to the spell row because the index says it is a Spell, a Field Spell
+ * goes to the Field Zone, and a Link monster takes the Extra Monster Zone because
+ * that is the only place the rules let it sit. The log's verb is a sentence for a
+ * human, the card's type is data.
  */
 
 import type { Card, DuelEvent, DuelSeat } from '@/lib/api'
+import { frameOf, type Frame } from '@/lib/frames'
 
 export const MONSTER_ZONES = 5
 export const SPELL_ZONES = 5
+
+/** Monsters that are summoned out of the Extra Deck, and so land in the Extra
+    Monster Zone rather than in a main Monster Zone. */
+const EXTRA_DECK_FRAMES = new Set<Frame>(['fusion', 'synchro', 'xyz', 'link'])
 
 export interface Placed {
   code: number
@@ -27,6 +34,10 @@ export interface Placed {
 export interface SeatBoard {
   monsters: (Placed | null)[]
   spells: (Placed | null)[]
+  /** The Field Zone: one card, shared between Field Spells and nothing else. */
+  field: Placed | null
+  /** This seat's half of the two Extra Monster Zones. One card, by the rules. */
+  extraMonster: Placed | null
   graveyard: number[]
   life: number
   hand: number
@@ -47,11 +58,43 @@ function emptySeat(): SeatBoard {
   return {
     monsters: Array(MONSTER_ZONES).fill(null),
     spells: Array(SPELL_ZONES).fill(null),
+    field: null,
+    extraMonster: null,
     graveyard: [],
     life: 8000,
     // Both players open on five and draw for turn. A fabricated log does not
     // track a hand, so this is a count, never a set of named cards.
     hand: 5,
+  }
+}
+
+/** Put a card down where its own type says it goes, sending anything it displaces
+    to the graveyard the way the rules do. */
+function place(seat: SeatBoard, placed: Placed, card: Card | undefined): void {
+  const frame = card ? frameOf(card) : 'unknown'
+
+  if (card && card.kind !== 'monster' && card.subtypes.includes('field')) {
+    if (seat.field) seat.graveyard.push(seat.field.code)
+    seat.field = placed
+    return
+  }
+
+  if (EXTRA_DECK_FRAMES.has(frame) && !seat.extraMonster) {
+    seat.extraMonster = placed
+    return
+  }
+
+  // An unreadable code is treated as a monster: the fake executor plays out of a
+  // main deck, and a monster row is the likelier home for anything nameless.
+  const row = frame === 'spell' || frame === 'trap' ? seat.spells : seat.monsters
+  const free = row.indexOf(null)
+  if (free === -1) {
+    // The zones are full, so something goes to the graveyard to make room.
+    const displaced = row[0]
+    if (displaced) seat.graveyard.push(displaced.code)
+    row[0] = placed
+  } else {
+    row[free] = placed
   }
 }
 
@@ -81,22 +124,15 @@ export function boardAt(
     if (event.action === 'draw') {
       seat.hand += 1
     } else if (event.action === 'summon' && event.card !== null) {
-      const card = byCode.get(event.card)
-      const row = card?.kind === 'monster' || !card ? seat.monsters : seat.spells
-      const free = row.indexOf(null)
-      const placed: Placed = {
-        code: event.card,
-        since: event.index,
-        facedown: event.text.startsWith('sets'),
-      }
-      if (free === -1) {
-        // The zones are full, so something goes to the graveyard to make room.
-        const displaced = row[0]
-        if (displaced) seat.graveyard.push(displaced.code)
-        row[0] = placed
-      } else {
-        row[free] = placed
-      }
+      place(
+        seat,
+        {
+          code: event.card,
+          since: event.index,
+          facedown: event.text.startsWith('sets'),
+        },
+        byCode.get(event.card),
+      )
       seat.hand = Math.max(0, seat.hand - 1)
     } else if (event.action === 'attack') {
       board.attacking = event.seat
