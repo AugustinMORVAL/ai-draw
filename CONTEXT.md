@@ -4,6 +4,16 @@ RL-driven Yu-Gi-Oh! deckbuilding ecosystem: a Builder that constructs and refine
 
 ## Language
 
+### Cards
+
+**Supported pool**:
+The 864 cards the frozen Pilot can represent — the codes of `embed864.pkl`, in that file's order, committed as `data/pilot-864/code_list.txt`. Every phase-1 card decision ranges over exactly these: the Builder's action space, the Damaged deck's replacement draws, and Warm-start's decklist filter. Widening it means training a new Pilot, not editing a file.
+_Avoid_: card pool, code list (ambiguous with the executor's 13,472-card ceiling, which is a phase-2 target)
+
+**Candidate deck**:
+The deck currently under evaluation — the Builder's construct output or a mutation of it — injected into the executor's hidden `_candidate` deck slot between Screening batches. Distinct from a Seed deck (a fixed known-good list) and from the Gauntlet's opponent decks.
+_Avoid_: candidate (bare — ambiguous with a candidate *action* in the Builder's MDP)
+
 ### Constraints
 
 **Constraint**:

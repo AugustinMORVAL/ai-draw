@@ -30,16 +30,31 @@ needs it. Fixing it is phase-2 work — see `YGO-ExodAI/ygo-agent` in ADR-0001.
 
 ## Smoke test
 
+**Always pass the 864-card code list.** The card ids the env emits are line numbers in
+`--code_list_file`, and the frozen Pilot's embedding table has room for 999 of them. With the
+vendored 13,472-line `scripts/code_list.txt`, 552 of the 604 cards in the shipped decks land past
+the end of that table, clamp, and reach the policy as the same zero "unknown" vector — a card-blind
+Pilot that still scores ~0.50 against the greedy bot. See ADR-0001; the pool is 864 cards.
+
 ```bash
 cd scripts
-gh release download v0.1 --repo sbl1996/ygo-agent -p '0546_22750M.flax_model' -D checkpoints
+gh release download v0.1 --repo sbl1996/ygo-agent \
+  -p '0546_22750M.flax_model' -p 'embed864.pkl' -D checkpoints
 python -u eval.py --checkpoint checkpoints/0546_22750M.flax_model \
+  --code_list_file ../../../data/pilot-864/code_list.txt \
   --num_episodes 1024 --num_envs 28 --env_threads 28 --seed 0
 ```
 
-Expect `win_rate` near 0.50 against the greedy bot and no abort.
+`~0.50 vs the greedy bot is not a passing result` — it is what a blind pilot scores. The Pilot is
+correctly wired only if its win rate under the 864 code list is materially above its win rate under
+the 13,472-line one. Run both and compare; that gap is the acceptance test for the fork.
 
 ## Measured throughput (i7-14700KF / RTX 4070 Ti Super, 28 threads)
+
+**These numbers were measured card-blind** (13,472-line code list) and are pending re-measurement
+under `data/pilot-864/code_list.txt` — a Pilot that can actually see its cards plays different, and
+probably shorter, duels. Treat the shape of the curve as sound and the absolute duels/s as an
+estimate until phase 0 re-closes.
 
 `eval.py` with the frozen Pilot `0546_22750M`, all 33 shipped decks, `--env_threads 28`,
 1024–4096 episodes per run. Duels/s = `SPS / mean episode length`.
