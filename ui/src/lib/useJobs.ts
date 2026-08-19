@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, type Deck, type Health, type Job } from '@/lib/api'
+import {
+  ApiError,
+  api,
+  type Constraint,
+  type Deck,
+  type Health,
+  type Job,
+} from '@/lib/api'
 
 const POLL_MS = 700
 
@@ -51,6 +58,7 @@ export function useJobs() {
       deck?: Deck | null
       mutations: number
       screening_duels: number
+      constraint?: Constraint | null
     }) => {
       setError(null)
       try {
@@ -81,20 +89,20 @@ export function useJobs() {
 }
 
 /**
- * A 422 from the queue carries the same deck report the paste box already shows,
+ * A 422 from the queue carries the report the screen already shows -- a deck report
+ * for an illegal deck, a Constraint report for an interest no deck can satisfy --
  * so surface the first reason rather than a wall of JSON.
  */
 function submitMessage(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e)
-  const start = raw.indexOf('{')
-  if (start === -1) return raw
-  try {
-    const body = JSON.parse(raw.slice(start)) as {
-      detail?: { flags?: { reason: string }[]; deck_flags?: { reason: string }[] }
+  const detail = e instanceof ApiError ? e.detail : null
+  if (detail !== null && typeof detail === 'object') {
+    const body = detail as {
+      flags?: { reason: string }[]
+      deck_flags?: { reason: string }[]
     }
-    const reason = body.detail?.flags?.[0]?.reason ?? body.detail?.deck_flags?.[0]?.reason
-    return reason ? `Deck refused: ${reason}` : raw
-  } catch {
-    return raw
+    const reason = body.flags?.[0]?.reason ?? body.deck_flags?.[0]?.reason
+    if (reason) return `Refused: ${reason}`
   }
+  return raw
 }

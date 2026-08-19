@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from . import constraints
 from .cards import DEFAULT_COPY_LIMIT, CardIndex
 from .decklist import ParsedDeck
 from .models import (
@@ -26,6 +27,7 @@ from .models import (
     CardFlag,
     CardIssue,
     CardSection,
+    Constraint,
     Deck,
     DeckEntry,
     DeckFlag,
@@ -141,39 +143,35 @@ def _flag_card(
     return None
 
 
-def _mask(index: CardIndex, main: Counter[int]) -> MaskPreview:
+def _mask(
+    index: CardIndex, main: Counter[int], constraint: Constraint | None
+) -> MaskPreview:
     """Count the Builder's action space for this deck: what it may still add.
 
-    Masked-out picks are grouped by why, because "712 legal picks" tells a user
-    nothing about what the Builder is actually choosing between.
+    The count comes from `constraints.action_space`, the same function the deck
+    builder and every proposed swap pick from, so this preview cannot promise a
+    pick the Builder would not actually be allowed to make.
     """
-    groups: Counter[str] = Counter()
-    legal = 0
-
-    for code, card in index.pool.items():
-        if card.section is CardSection.TOKEN:
-            groups["Tokens, which are made and never deckable"] += 1
-        elif card.section is CardSection.EXTRA:
-            groups["Extra Deck: phase 1 builds main decks only"] += 1
-        elif card.limit == 0:
-            groups["Forbidden on the banlist"] += 1
-        elif main.get(code, 0) >= card.limit:
-            groups["Already at its copy limit in this deck"] += 1
-        else:
-            legal += 1
-
+    space = constraints.action_space(index, main, constraint)
     return MaskPreview(
         pool_size=len(index),
-        legal_picks=legal,
+        legal_picks=len(space.allowed),
         masked=[
             MaskedGroup(reason=reason, count=count)
-            for reason, count in sorted(groups.items(), key=lambda g: -g[1])
+            for reason, count in sorted(space.masked.items(), key=lambda g: -g[1])
         ],
     )
 
 
-def review(parsed: ParsedDeck, index: CardIndex) -> DeckReport:
-    """Judge a parsed decklist and describe the Builder's room to move within it."""
+def review(
+    parsed: ParsedDeck, index: CardIndex, constraint: Constraint | None = None
+) -> DeckReport:
+    """Judge a parsed decklist and describe the Builder's room to move within it.
+
+    A Constraint, when the caller has one, is judged *beside* legality and never
+    folded into it: `legal` stays a statement about the rules, because that is the
+    field that decides whether the queue may see this deck at all.
+    """
     banlist = index.banlist
     main = Counter(parsed.main)
     extra = Counter(parsed.extra)
@@ -241,7 +239,12 @@ def review(parsed: ParsedDeck, index: CardIndex) -> DeckReport:
         flags=sorted(flags, key=lambda f: (f.issue.value, f.name or "")),
         deck_flags=deck_flags,
         unresolved=parsed.unresolved,
-        mask=_mask(index, main),
+        mask=_mask(index, main, constraint),
+        constraint=(
+            constraints.review(index, main, constraint, main_count=main_count)
+            if constraint is not None
+            else None
+        ),
         main_count=main_count,
         extra_count=extra_count,
     )

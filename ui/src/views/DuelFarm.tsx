@@ -2,7 +2,7 @@ import { ArrowRight, Play } from 'lucide-react'
 import { CardArt } from '@/components/card/CardArt'
 import { Button } from '@/components/ui/Button'
 import { StateBadge } from '@/components/ui/StateBadge'
-import type { Card, Job, RefineResult, Swap } from '@/lib/api'
+import type { Card, Constraint, Job, RefineResult, Swap } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { usePool } from '@/lib/usePool'
 
@@ -21,6 +21,39 @@ function positionLabel(job: Job) {
   if (job.state === 'queued') return `#${job.queue_position} in queue`
   if (job.state === 'running') return `${job.progress.step}/${job.progress.total}`
   return when(job)
+}
+
+/**
+ * The interests the job ran under, spelled out.
+ *
+ * A refine result read months later has to say what it was asked for, or the deck
+ * is unexplainable: every swap in the log was drawn from the mask this Constraint
+ * defined, and the cards it ruled out never had a chance to appear.
+ */
+function Interests({ constraint }: { constraint: Constraint }) {
+  const said = [
+    ...(constraint.main_size !== null ? [`${constraint.main_size} cards`] : []),
+    ...constraint.clauses.map(
+      (clause) =>
+        `${clause.bound === 'at_least' ? 'at least' : 'at most'} ${clause.count} ${clause.value}`,
+    ),
+  ]
+  if (said.length === 0) return null
+  return (
+    <div className="border border-edge-soft bg-panel-2 px-3 py-2">
+      <div className="label text-faint">Interests, masked into every swap</div>
+      <div className="mt-1 flex flex-wrap gap-1.5">
+        {said.map((phrase) => (
+          <span
+            key={phrase}
+            className="border border-edge bg-slot px-1.5 py-0.5 font-mono text-[10.5px] text-muted"
+          >
+            {phrase}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -132,6 +165,8 @@ function JobDetail({
       </header>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+        {job.params.constraint && <Interests constraint={job.params.constraint} />}
+
         {job.state === 'queued' && (
           <p className="text-xs text-muted">
             Position{' '}

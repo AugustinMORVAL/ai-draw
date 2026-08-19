@@ -2,12 +2,14 @@ import { useMemo, useState } from 'react'
 import { ChevronDown, Download, Trash2 } from 'lucide-react'
 import { CardBrowser } from '@/components/card/CardBrowser'
 import { CardInspector, FrameLegend } from '@/components/card/CardInspector'
+import { ConstraintPanel } from '@/components/deck/ConstraintPanel'
 import { DeckGrid } from '@/components/deck/DeckGrid'
 import { DeckStatus } from '@/components/deck/DeckStatus'
 import { Button } from '@/components/ui/Button'
-import type { Card, Deck, DeckReport, Health } from '@/lib/api'
+import type { Card, Constraint, Deck, DeckReport, Health } from '@/lib/api'
 import { cn } from '@/lib/cn'
-import { addCopy, copiesOf, downloadYdk, removeCopy } from '@/lib/deckText'
+import { addCopy, copiesOf, downloadYdk, removeCopy, toYdk } from '@/lib/deckText'
+import type { useConstraint } from '@/lib/useConstraint'
 import { usePool } from '@/lib/usePool'
 
 /** A shipped seed deck, so the editor can be tried without owning a `.ydk`. */
@@ -81,6 +83,7 @@ export function DeckEditor({
   pending,
   parseError,
   health,
+  interests,
   onSubmit,
   busy,
   submitError,
@@ -91,10 +94,12 @@ export function DeckEditor({
   pending: boolean
   parseError: string | null
   health: Health | null
+  interests: ReturnType<typeof useConstraint>
   onSubmit: (body: {
     deck?: Deck | null
     mutations: number
     screening_duels: number
+    constraint?: Constraint | null
   }) => Promise<void>
   busy: boolean
   submitError: string | null
@@ -193,6 +198,22 @@ export function DeckEditor({
           </p>
         )}
 
+        <ConstraintPanel
+          constraint={interests.constraint}
+          stated={interests.stated}
+          report={report}
+          pending={pending}
+          onSize={interests.setSize}
+          onAdd={interests.addClause}
+          onEdit={interests.editClause}
+          onDrop={interests.dropClause}
+          onClear={interests.clear}
+          onBuilt={(main) => {
+            setText(toYdk(main, []))
+            setInspected(null)
+          }}
+        />
+
         {!text && (
           <div className="flex flex-wrap items-center gap-3 border border-dashed border-edge bg-panel/60 px-3 py-4">
             <p className="text-[11.5px] text-muted">
@@ -228,6 +249,7 @@ export function DeckEditor({
                 deck: report?.deck ?? null,
                 mutations,
                 screening_duels: duels,
+                constraint: interests.asked,
               })
             }}
           >
@@ -237,8 +259,19 @@ export function DeckEditor({
             <p className="text-[11.5px] leading-relaxed text-muted">
               {hasDeck
                 ? 'The Builder mutates this deck swap by swap, keeping any swap with a positive Delta score. Every swap comes from inside the Masked action space, so the deck stays legal at every step.'
-                : 'With no deck built, this refines a random legal deck drawn from the 408 main-deck cards the Pilot can play.'}
+                : interests.stated
+                  ? 'With no deck built, this builds one under your interests first, then refines it.'
+                  : 'With no deck built, this refines a random legal deck drawn from the 408 main-deck cards the Pilot can play.'}
             </p>
+            {interests.stated && (
+              <p className="text-[10.5px] leading-relaxed text-faint">
+                Your interests mask every swap, so the job cannot spend a mutation on
+                a card you ruled out.
+                {hasDeck && report?.constraint?.satisfied === false
+                  ? ' This deck does not meet them yet: each masked swap pays that down, but only swaps with a positive Delta are kept, so the job pulls toward your interests without promising to arrive. Build the deck to be sure of it.'
+                  : ''}
+              </p>
+            )}
 
             <div className="grid grid-cols-2 gap-2">
               <label className="space-y-1">

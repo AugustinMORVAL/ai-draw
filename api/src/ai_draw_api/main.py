@@ -10,14 +10,19 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
+from . import constraints
 from .cards import card_index
 from .decklist import ParsedDeck
 from .decklist import parse as parse_decklist
 from .executor import DuelExecutor, FakeExecutor
 from .legality import review
 from .models import (
+    BuildDeck,
     Card,
+    Constraint,
+    ConstraintReport,
     DeckReport,
+    Facets,
     DuelReplay,
     DuelReplaySummary,
     Health,
@@ -28,7 +33,6 @@ from .models import (
     SubmitRefine,
 )
 from .pool import supported_pool
-from .refine import random_deck
 from .store import JobStore
 from .worker import Worker
 
@@ -38,6 +42,19 @@ DEV_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
+
+
+def _impossible_detail(
+    constraint: Constraint, impossible: constraints.Impossible
+) -> ConstraintReport:
+    """A 422 body for a Constraint no deck can satisfy, carrying its sentences.
+
+    Shaped like the report the form already renders, so the UI shows the reasons in
+    the place the user was reading rather than a wall of JSON.
+    """
+    return ConstraintReport(
+        constraint=constraint, feasible=False, satisfied=False, flags=impossible.flags
+    )
 
 
 def create_app(
@@ -108,18 +125,65 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"no card with code {code}")
         return card
 
+    @app.get("/api/constraints/facets", response_model=Facets)
+    async def constraint_facets() -> Facets:
+        """Every value a Constraint may name, with the ceiling the pool sets on it.
+
+        Values the pool knows but no main deck can hold come back at a ceiling of
+        zero rather than being dropped, so a user asking for a Cyberse deck is told
+        why the answer is no instead of facing an empty dropdown (ADR-0005).
+        """
+        return constraints.facets(card_index())
+
     @app.post("/api/decks/parse", response_model=DeckReport)
     async def parse_deck(body: ParseDeck) -> DeckReport:
         """Read a pasted decklist and say, card by card, what stands in its way."""
         index = card_index()
-        return review(parse_decklist(body.text, index), index)
+        return review(parse_decklist(body.text, index), index, body.constraint)
+
+    @app.post("/api/decks/build", response_model=DeckReport)
+    async def build_deck(body: BuildDeck) -> DeckReport:
+        """Build a deck under a Constraint, and report it the way a paste is reported.
+
+        The deck comes back inside a full `DeckReport`, so the screen that shows a
+        built deck is the same screen that shows a pasted one -- legality, Masking
+        preview and Constraint conformance all judged by the same code that will
+        judge it again once the user has edited it.
+        """
+        index = card_index()
+        try:
+            deck = constraints.construct(index, body.constraint, seed=body.seed)
+        except constraints.Impossible as impossible:
+            raise HTTPException(
+                status_code=422,
+                detail=_impossible_detail(body.constraint, impossible).model_dump(
+                    mode="json"
+                ),
+            ) from impossible
+        return review(ParsedDeck(main=list(deck.main)), index, body.constraint)
 
     @app.post("/api/jobs/refine", response_model=Job, status_code=201)
     async def submit_refine(body: SubmitRefine) -> Job:
-        deck = body.deck or random_deck()
+        index = card_index()
+        constraint = body.constraint
+        if constraint is not None:
+            # An unsatisfiable Constraint is refused at the door like an illegal
+            # deck, for the same reason: there is no work to queue. A *satisfiable*
+            # one the deck does not yet meet is fine -- masked swaps drive it there.
+            try:
+                deck = body.deck or constraints.construct(index, constraint)
+            except constraints.Impossible as impossible:
+                raise HTTPException(
+                    status_code=422,
+                    detail=_impossible_detail(constraint, impossible).model_dump(
+                        mode="json"
+                    ),
+                ) from impossible
+        else:
+            deck = body.deck or constraints.random_deck()
+
         if body.deck is not None:
-            index = card_index()
-            report = review(ParsedDeck(main=list(deck.main)), index)
+            report = review(ParsedDeck(main=list(deck.main)), index, constraint)
             if not report.legal:
                 # An illegal deck is not a bad result, it is an aborted duel process
                 # (#4). Refuse it at the door, with the reasons the UI already shows.
@@ -130,6 +194,7 @@ def create_app(
             deck=deck,
             mutations=body.mutations,
             screening_duels=body.screening_duels,
+            constraint=constraint,
         )
         return await store.enqueue(JobKind.REFINE, params.model_dump())
 

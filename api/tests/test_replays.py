@@ -13,7 +13,8 @@ import asyncio
 import pytest
 
 from ai_draw_api.executor import GAUNTLET, FakeExecutor
-from ai_draw_api.refine import REPLAY_SAMPLE, random_deck
+from ai_draw_api.constraints import random_deck
+from ai_draw_api.refine import REPLAY_SAMPLE
 
 pytestmark = pytest.mark.asyncio
 

@@ -90,8 +90,75 @@ export interface DeckReport {
   deck_flags: DeckFlag[]
   unresolved: UnresolvedLine[]
   mask: MaskPreview
+  /** Only when a Constraint was sent. Judged beside legality, never inside it. */
+  constraint: ConstraintReport | null
   main_count: number
   extra_count: number
+}
+
+export type ConstraintFacet = 'race' | 'attribute' | 'kind' | 'subtype'
+
+export type Bound = 'at_least' | 'at_most'
+
+export interface ConstraintClause {
+  facet: ConstraintFacet
+  value: string
+  bound: Bound
+  count: number
+}
+
+/**
+ * What the user asked for, and may drop. Legality is neither.
+ *
+ * `main_size` is null when the user set no card-count cap: legality's 40-to-60
+ * still holds, and a 42-card deck is not flagged for being 42.
+ */
+export interface Constraint {
+  main_size: number | null
+  clauses: ConstraintClause[]
+}
+
+export type ConstraintIssue =
+  | 'impossible'
+  | 'unmet_minimum'
+  | 'over_maximum'
+  | 'wrong_size'
+
+export interface ConstraintFlag {
+  issue: ConstraintIssue
+  reason: string
+  clause: ConstraintClause | null
+}
+
+export interface ClauseStatus {
+  clause: ConstraintClause
+  held: number
+  satisfied: boolean
+  /** The most copies the pool could ever supply. A floor above it is impossible. */
+  ceiling: number
+}
+
+export interface ConstraintReport {
+  constraint: Constraint
+  /** False when no legal deck satisfies it — the pool's limit, not the deck's. */
+  feasible: boolean
+  satisfied: boolean
+  clauses: ClauseStatus[]
+  flags: ConstraintFlag[]
+}
+
+export interface FacetValue {
+  facet: ConstraintFacet
+  value: string
+  cards: number
+  copies: number
+  /** Pool cards with this value that no main deck may hold: Tokens, Extra Deck. */
+  elsewhere: number
+}
+
+export interface Facets {
+  main_deck_pool_size: number
+  values: FacetValue[]
 }
 
 export interface Swap {
@@ -162,7 +229,12 @@ export interface Job {
   finished_at: number | null
   queue_position: number | null
   progress: Progress
-  params: { deck?: Deck; mutations?: number; screening_duels?: number }
+  params: {
+    deck?: Deck
+    mutations?: number
+    screening_duels?: number
+    constraint?: Constraint | null
+  }
   result: RefineResult | null
   error: string | null
 }
@@ -179,14 +251,44 @@ export interface Health {
 
 export const TERMINAL: JobState[] = ['succeeded', 'failed', 'cancelled']
 
+/**
+ * A refusal from the API, with the body it refused with.
+ *
+ * Both refusals this app makes on purpose — an illegal deck, an unsatisfiable
+ * Constraint — answer 422 with the same report the screen was already showing. So
+ * the parsed `detail` is kept beside the message: the caller can render the
+ * reasons where the user was reading rather than a wall of JSON.
+ */
+export class ApiError extends Error {
+  status: number
+  detail: unknown
+
+  constructor(status: number, message: string, detail: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.detail = detail
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { 'content-type': 'application/json' },
     ...init,
   })
   if (!res.ok) {
-    const detail = await res.text().catch(() => '')
-    throw new Error(`${res.status} ${res.statusText}${detail ? `: ${detail}` : ''}`)
+    const body = await res.text().catch(() => '')
+    let detail: unknown = null
+    try {
+      detail = (JSON.parse(body) as { detail?: unknown }).detail ?? null
+    } catch {
+      detail = null
+    }
+    throw new ApiError(
+      res.status,
+      `${res.status} ${res.statusText}${body ? `: ${body}` : ''}`,
+      detail,
+    )
   }
   return res.json() as Promise<T>
 }
@@ -197,17 +299,26 @@ export const api = {
   pool: () => request<Card[]>('/pool'),
   jobs: () => request<Job[]>('/jobs'),
   job: (id: string) => request<Job>(`/jobs/${id}`),
+  /** Every value a Constraint may name, with the ceiling the pool sets on it. */
+  facets: () => request<Facets>('/constraints/facets'),
   submitRefine: (body: {
     deck?: Deck | null
     mutations: number
     screening_duels: number
+    constraint?: Constraint | null
   }) => request<Job>('/jobs/refine', { method: 'POST', body: JSON.stringify(body) }),
   searchCards: (q: string, limit = 12) =>
     request<Card[]>(`/cards?q=${encodeURIComponent(q)}&limit=${limit}`),
-  parseDeck: (text: string) =>
+  parseDeck: (text: string, constraint?: Constraint | null) =>
     request<DeckReport>('/decks/parse', {
       method: 'POST',
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, constraint: constraint ?? null }),
+    }),
+  /** Build a deck under a Constraint. Comes back as a full report, like a paste. */
+  buildDeck: (constraint: Constraint, seed?: number | null) =>
+    request<DeckReport>('/decks/build', {
+      method: 'POST',
+      body: JSON.stringify({ constraint, seed: seed ?? null }),
     }),
   cancel: (id: string) => request<Job>(`/jobs/${id}/cancel`, { method: 'POST' }),
   replays: (jobId: string) => request<DuelReplaySummary[]>(`/jobs/${jobId}/replays`),

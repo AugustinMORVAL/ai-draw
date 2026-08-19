@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Shell } from '@/components/chrome/Shell'
-import type { Deck } from '@/lib/api'
+import type { Constraint, Deck } from '@/lib/api'
+import { useConstraint } from '@/lib/useConstraint'
 import { useDeckReport } from '@/lib/useDeckReport'
 import { useJobs } from '@/lib/useJobs'
 import { useRoute } from '@/lib/useRoute'
@@ -31,12 +32,14 @@ export default function App() {
   const [route, go] = useRoute()
   const [busy, setBusy] = useState(false)
   const [deckText, setDeckText] = useDeckText()
-  const deck = useDeckReport(deckText)
+  const interests = useConstraint()
+  const deck = useDeckReport(deckText, interests.asked)
 
   const onSubmit = async (body: {
     deck?: Deck | null
     mutations: number
     screening_duels: number
+    constraint?: Constraint | null
   }) => {
     setBusy(true)
     const job = await submitRefine(body)
@@ -60,6 +63,7 @@ export default function App() {
           pending={deck.pending}
           parseError={deck.error}
           health={health}
+          interests={interests}
           onSubmit={onSubmit}
           busy={busy}
           submitError={error}

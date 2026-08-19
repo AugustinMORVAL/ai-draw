@@ -29,7 +29,7 @@ Each slice is done when its manual test passes by hand in a browser. Estimates a
 | --- | --- | --- | --- | --- |
 | 0 ✓ | Shell, seam, fake executor, durable job queue | Submit a fake refine job; watch it queue, run, finish; reload the page mid-job and it is still there | - | 1 |
 | 1 ✓ | Deck input: paste a decklist, card search, legality + Masking preview | Paste a deck with 4 copies of a card and an out-of-pool card; both are flagged with reasons | #4 | 1.5 |
-| 2 | Interests: the Constraint form that drives a build | Ask for a Cyberse deck under a card-count cap; get a legal deck that respects it | #4 | 1 |
+| 2 ✓ | Interests: the Constraint form that drives a build | Ask for a themed deck under a card-count cap; get a legal deck that respects it. Ask for a Cyberse one and get the reason no deck can be built | #4 | 1 |
 | 3 | Refine job: submit, queue position, live progress, result | Submit a deck, watch swap-by-swap progress, see the final diff and which cards changed | #6, #7 | 2 |
 | 4 | Test job: Gate evaluation vs the Gauntlet | Run a test, get a win rate with its matchup breakdown, labelled Gate fidelity | #3, #8 | 1.5 |
 | 5 | Deck library: save, name, version, compare | Save two decks, diff them, see each one's last Gate result | - | 1.5 |
@@ -50,6 +50,8 @@ behind each phase.
 2. **Phase 3 — Conditioning.** Until then, a user's stated interest is enforced by Masking only:
    the deck is legal and respects the Constraint, but the Builder was not steered toward it. The
    quality gap between "filtered" and "intended" is the difference between a demo and a product.
+   Slice 2 makes this visible rather than hiding it — a build is a uniform draw inside the mask,
+   and the Interests panel says as much on screen.
 
 ## Open questions
 
@@ -57,13 +59,66 @@ behind each phase.
   whether the API runs on that box or on a small VPS that dispatches to it.
 - **What a user sees while a job runs.** Screening win rates are noisy by design (+/-4-6 points,
   ADR-0003). Showing them live is honest but will read as the deck getting worse half the time.
+- **An interest is a card count, not an archetype.** "A Labrynth deck" is a set of named cards
+  a human recognises; a Constraint can only say "at least 20 Fiends". Archetype membership is in
+  the card text (`desc`) and in nothing structured the index carries, so naming one would mean
+  matching strings in card names. Worth revisiting once users say which they meant.
 - **Name matching is exact, not fuzzy.** Slice 1 folds accents, quote styles and spacing, but a
   misspelling still resolves to nothing. Good enough while the paste box is mostly `.ydk`; a
   typo-tolerant matcher is worth revisiting if users type more than they paste.
 
 ## Status
 
-**Slices 0 and 1 are done. Slice 6 is done against the fake executor.**
+**Slices 0, 1 and 2 are done. Slice 6 is done against the fake executor.**
+
+### Slice 2 -- Interests, the Constraint that drives a build
+
+The manual test passes, in the form the pool allowed it to: asking for 20+
+Spellcasters in 40 cards with at most 4 Traps builds a legal deck that holds them.
+Asking for a **Cyberse** deck -- the wording in the row above, before the pool was
+counted -- is refused, with the reason.
+
+`api/.../constraints.py` is the whole slice. One function, `action_space`, answers
+"what may be picked into this deck" for the three callers that must not disagree: the
+Masking preview the editor shows, deck construction, and every swap a refine job
+proposes. A preview that counted picks the Builder would not make would be a lie
+told in a screenshot.
+
+- A **Constraint** is `main_size` plus up to 8 clauses, each a bound (`at least` /
+  `at most`), a count, and a facet value: race, attribute, card type or subtype.
+  `GET /api/constraints/facets` lists every value with the ceiling the pool sets on
+  it, so the form offers only what exists and says how much of it there is.
+- `POST /api/decks/build` constructs under a Constraint and answers with the same
+  `DeckReport` a paste gets, so one screen renders both. `POST /api/decks/parse` and
+  `POST /api/jobs/refine` both take a Constraint too.
+- **A Constraint never makes a deck illegal.** `legal` stays a statement about the
+  rules, because that is the field that decides whether the queue may see the deck.
+  Conformance is reported beside it and stops nothing.
+- **`main_size` is optional.** A user who never chose 40 is not told their 42-card
+  deck is the wrong size; legality's 40-to-60 already holds and already reports.
+
+Three facts this slice surfaced:
+
+- **The pool can build no Cyberse deck.** It knows 34 Cyberse cards and every one is
+  a Token or an Extra Deck monster -- 14 Link monsters, 4 Synchros, 16 Tokens, zero
+  main-deck cards. The slice's own manual test asked for the one archetype the Pilot cannot be
+  handed, which is the pool being the Pilot's *vocabulary* rather than a list of
+  buildable cards, arriving as a product problem. So an unsatisfiable Constraint is
+  refused at the door with its ceiling spelled out ("the pool can supply at most 0
+  such copies to a main deck"), like an illegal deck and for the same reason: there
+  is no work to queue.
+- **The floor has to be paid first, or a cap steals its slots.** Draw filler first
+  under "at least 20 Spellcasters, at most 22 monsters" and 22 non-Spellcaster
+  monsters can land before the floor is touched, leaving a perfectly satisfiable
+  Constraint unsatisfiable. Construction pays floors first and the at-least mask --
+  when the empty slots run down to the cards still owed, nothing else may be picked
+  -- makes a feasible minimum hold by construction rather than by luck.
+- **A refine job pulls toward a Constraint without promising to arrive.** Masking
+  decides what may be *proposed*; the Delta score decides what is *kept*. Every
+  masked swap pays down an unmet floor, but only accepted swaps land, so a
+  non-conformant deck moves toward the Constraint at the pace the win rate allows.
+  Building under the Constraint is the only thing that guarantees it, and the submit
+  panel says so rather than implying the job will fix it.
 
 ### The interface: a deck editor, not a form
 
@@ -76,7 +131,9 @@ the way the clients these users already have are built (EDOPro, MDPro3, Master D
   definition and is still parsed server-side, so a visual edit rewrites the text
   rather than forking a second answer to "what is in this deck".
 - **Duel farm** -- the queue and one job, with each mutation drawn as the two cards it
-  traded rather than as two passcodes.
+  traded rather than as two passcodes, above the interests the job ran under: a
+  result read months later has to say what it was asked for, or the deck cannot be
+  explained.
 - **Replays** -- the duel mat, life point bars, a transport, and the action log. All
   four read from a single index into the log, so they cannot disagree.
 
@@ -167,7 +224,7 @@ exact pool, our rules are wrong.
 - `ui/` — Tailwind v4 shell: the `live: false` header badge, the job list with honest queue
   positions, and a job view with progress and the swap log.
 
-62 tests in `api/tests/`, including both slices' manual tests.
+91 tests in `api/tests/`, including every slice's manual test.
 
 Running it:
 
@@ -175,7 +232,7 @@ Running it:
 make up          # build and start both containers -> http://localhost:8080
 make down        # stop, keeping every queued and finished job
 make clean       # stop and delete the job database volume
-make test        # the 62 tests, inside the API image
+make test        # the 91 tests, inside the API image
 ```
 
 `make up` publishes the UI on 8080 and the API on 8000; both are overridable

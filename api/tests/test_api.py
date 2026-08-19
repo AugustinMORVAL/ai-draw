@@ -144,3 +144,103 @@ async def test_the_whole_pool_comes_back_in_one_response(client):
     assert sum(card["section"] == "main" for card in pool) == 411
     ash = next(c for c in pool if c["name"] == 'Maxx "C"')
     assert ash["desc"], "the inspector reads the card text out of this"
+
+
+SPELLCASTERS = {
+    "main_size": 40,
+    "clauses": [
+        {"facet": "race", "value": "Spellcaster", "bound": "at_least", "count": 20},
+        {"facet": "kind", "value": "trap", "bound": "at_most", "count": 4},
+    ],
+}
+
+
+async def test_the_facets_a_constraint_can_be_written_against(client):
+    listed = (await client.get("/api/constraints/facets")).json()
+    assert listed["main_deck_pool_size"] == 408
+    by_value = {(v["facet"], v["value"]): v for v in listed["values"]}
+    assert by_value[("race", "Spellcaster")]["copies"] > 0
+    cyberse = by_value[("race", "Cyberse")]
+    assert cyberse["copies"] == 0 and cyberse["elsewhere"] == 34
+
+
+async def test_building_a_deck_under_a_constraint(client):
+    """The slice-2 manual test, over HTTP: ask, and get a legal deck that respects it."""
+    r = await client.post(
+        "/api/decks/build", json={"constraint": SPELLCASTERS, "seed": 2}
+    )
+    assert r.status_code == 200, r.text
+    report = r.json()
+
+    assert report["legal"] is True, report["flags"]
+    assert report["main_count"] == 40
+    assert report["constraint"]["satisfied"] is True, report["constraint"]["flags"]
+    held = {c["clause"]["value"]: c["held"] for c in report["constraint"]["clauses"]}
+    assert held["Spellcaster"] >= 20
+    assert held["trap"] <= 4
+
+
+async def test_a_constraint_the_pool_cannot_satisfy_is_refused_with_its_reason(client):
+    """No main-deck Cyberse card is in the 864, so there is no deck to queue."""
+    r = await client.post(
+        "/api/decks/build",
+        json={
+            "constraint": {
+                "main_size": 40,
+                "clauses": [
+                    {
+                        "facet": "race",
+                        "value": "Cyberse",
+                        "bound": "at_least",
+                        "count": 12,
+                    }
+                ],
+            }
+        },
+    )
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert detail["feasible"] is False
+    assert detail["flags"][0]["issue"] == "impossible"
+    assert "Extra Deck monster" in detail["flags"][0]["reason"]
+
+
+async def test_parsing_judges_a_constraint_beside_legality_not_inside_it(client):
+    text = SEED_DECK.read_text()
+    report = (
+        await client.post(
+            "/api/decks/parse", json={"text": text, "constraint": SPELLCASTERS}
+        )
+    ).json()
+
+    assert report["legal"] is True, "a Constraint is not a rule, so it cannot make it illegal"
+    assert report["constraint"]["satisfied"] is False
+    assert any(
+        flag["issue"] == "unmet_minimum" for flag in report["constraint"]["flags"]
+    )
+
+
+async def test_a_constrained_job_builds_its_own_deck_and_keeps_it_conformant(client):
+    r = await client.post(
+        "/api/jobs/refine",
+        json={"constraint": SPELLCASTERS, "mutations": 6, "screening_duels": 10},
+    )
+    assert r.status_code == 201, r.text
+    job = r.json()
+    assert job["params"]["constraint"]["main_size"] == 40
+
+    done = await _await_state(client, job["id"], {"succeeded", "failed"})
+    assert done["state"] == "succeeded", done["error"]
+
+    final = done["result"]["deck"]
+    checked = (
+        await client.post(
+            "/api/decks/parse",
+            json={
+                "text": "\n".join(str(code) for code in final["main"]),
+                "constraint": SPELLCASTERS,
+            },
+        )
+    ).json()
+    assert checked["legal"] is True, checked["flags"]
+    assert checked["constraint"]["satisfied"] is True, checked["constraint"]["flags"]
