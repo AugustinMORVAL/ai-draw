@@ -117,8 +117,22 @@ exact pool, our rules are wrong.
 Running it:
 
 ```
+make up          # build and start both containers -> http://localhost:8080
+make down        # stop, keeping every queued and finished job
+make clean       # stop and delete the job database volume
+make test        # the 62 tests, inside the API image
+```
+
+`make up` publishes the UI on 8080 and the API on 8000; both are overridable
+(`make up UI_PORT=3000`). nginx serves the built bundle and proxies `/api` to the API
+container, so the browser talks to one origin. The job database is a named volume:
+`down` keeps it, `clean` is the only thing that throws it away.
+
+For hot reload, run the two halves on the host instead:
+
+```
 cd api && uv venv && uv pip install -e ".[dev]" && .venv/bin/python -m pytest
-.venv/bin/python -m uvicorn ai_draw_api.main:app --port 8000
+.venv/bin/python -m uvicorn ai_draw_api.main:app --port 8000 --reload
 cd ui && npm install && npm run dev      # http://localhost:5173, proxies /api to :8000
 ```
 

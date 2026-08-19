@@ -1,0 +1,37 @@
+# The whole app, one command. `make up` wraps this.
+#
+# The UI is the only thing you need to open: nginx serves the built bundle and
+# proxies /api to the API container, so the browser talks to one origin. The API
+# port is published too, for curl and for pointing a local `npm run dev` at it.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: ai-draw-api
+    environment:
+      # Fake duels for now. The real executor lands with slice 7 (ADR-0005), and
+      # the header badge says `live: false` until it does.
+      AI_DRAW_DB: /var/lib/ai-draw/jobs.db
+    volumes:
+      # The job queue is durable by design: jobs outlive the request, the tab, and
+      # the process. `make clean` is the only thing that throws them away.
+      - jobs:/var/lib/ai-draw
+    ports:
+      - "${API_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ./ui
+    image: ai-draw-ui
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${UI_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  jobs:
