@@ -1,2 +1,5 @@
+# ygopro card scripts, cloned and pinned by vendor/ygo-agent's Makefile
+vendor/ygopro-scripts/
+
 __pycache__/
 *.pyc
