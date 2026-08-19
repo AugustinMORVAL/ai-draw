@@ -62,5 +62,33 @@ behind each phase.
 
 ## Status
 
-`api/` and `ui/` are scaffolded and uncommitted. Slice 0 is partially written: wire models exist
-(`api/src/ai_draw_api/models.py`), the executor interface, fake, and job queue do not yet.
+**Slice 0 is done.** `api/` and `ui/` are still uncommitted.
+
+What landed:
+
+- `api/src/ai_draw_api/executor.py` — the `DuelExecutor` Protocol and `FakeExecutor`. Every
+  evaluation returns a win rate *and* its fidelity; the fake is `live = False` and says so.
+- `api/src/ai_draw_api/store.py` — the durable single-slot queue over SQLite. Jobs survive the
+  tab and the process; `recover_orphans()` re-queues anything left RUNNING by a crash.
+- `api/src/ai_draw_api/refine.py` — the refine job. The swap proposer is a stand-in, not the
+  Builder: it picks by hash, keeps positive Deltas, and never breaks legality.
+- `api/src/ai_draw_api/main.py` — `GET /api/health`, `POST /api/jobs/refine`, `GET /api/jobs`,
+  `GET /api/jobs/{id}`, `POST /api/jobs/{id}/cancel`.
+- `ui/` — Tailwind v4 shell: the `live: false` header badge, a submit form, the job list with
+  honest queue positions, and a job view with progress and the swap log.
+- 20 tests in `api/tests/`, including the slice's manual test as `test_api.py`.
+
+Running it:
+
+```
+cd api && uv venv && uv pip install -e ".[dev]" && .venv/bin/python -m pytest
+.venv/bin/python -m uvicorn ai_draw_api.main:app --port 8000
+cd ui && npm install && npm run dev      # http://localhost:5173, proxies /api to :8000
+```
+
+Known gaps, deliberately left for later slices:
+
+- **Restart recovery re-runs a job from the start.** The job is never lost, but the swaps it had
+  already made are. Checkpointing per swap belongs with slice 3's progress work.
+- **Progress is polled at 700 ms**, not streamed. Fine at beta scale; slice 3 can revisit.
+- **No auth.** Slice 8.

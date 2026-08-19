@@ -1,0 +1,37 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --color-ink: #0b0c10;
+  --color-panel: #121419;
+  --color-panel-2: #171a21;
+  --color-line: #242832;
+  --color-line-soft: #1c2029;
+  --color-fg: #e7e9ee;
+  --color-muted: #8b93a5;
+  --color-faint: #5d6577;
+  --color-accent: #7c5cff;
+  --color-accent-soft: #a08cff;
+  --color-good: #3fbf7f;
+  --color-warn: #e0a53c;
+  --color-bad: #e0575b;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-ink text-fg font-sans antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'ss01';
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--color-accent) 40%, transparent);
+  }
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
