@@ -16,8 +16,8 @@ v0.1 release asset `embed864.pkl` in that pickle's insertion order (cosine simil
 So the id a card gets is a function of the *file*, and the vector it gets is a function of the
 *checkpoint*. They agree only when the file starts with those 864 codes in that order. Under the
 vendored 13,472-line `scripts/code_list.txt`, 552 of the 604 cards used by `assets/deck/*.ydk`
-land past line 999, where the embedding gather clamps — ~91% of every deck reaches the policy as
-the same zero vector.
+land past line 999. The consequence is sharper than "the model sees a generic unknown card":
+`nn.Embed` is a gather, and an out-of-range index under `jit` is undefined behaviour. See §5.
 
 ## 2. Why the pool file is 13,473 lines and not 864
 
@@ -37,8 +37,7 @@ is not an escape either.
 
 The fix keeps the pool and the file distinct: `tools/gen_code_list.py` emits the 864 embedded codes
 first, then every remaining vendored code in its original order (13,473 lines total). Lines 1..864
-carry the Pilot's vectors; anything past 999 clamps to a zero row, which is the honest
-representation of a card the Pilot never learned. **The pool is the first 864 lines. The tail is
+carry the Pilot's vectors; nothing past 864 was ever observed reaching the policy (§5). **The pool is the first 864 lines. The tail is
 there so the C++ core can answer a script's question without killing the run.**
 
 This also means an 864-length code list can never be used for the "does the model see its cards"
@@ -87,12 +86,71 @@ candidates/s, ~175k candidate evaluations per 24 h. Screening throughput is not 
 constraint, so the learned win-rate surrogate stays shelved. Caveat: `battle.py` (agent-vs-agent)
 roughly doubles model time, costing ~30–40% in the model-bound regime and little at 672 envs.
 
+## 5. The blind arm was not "blind" — it was NaN
+
+Re-measured after phase 0 closed, because "clamps to a zero row" was an assumption, not a
+measurement. It is wrong.
+
+`nn.Embed` gathers row `id` from a `(1000, 1024)` table. An out-of-range index under `jit` is
+undefined behaviour. Measured directly on this box (`jax[cuda12]`, RTX 4070 Ti Super):
+
+| index | 0 | 864 | 999 | 1000 | 13472 |
+| --- | --- | --- | --- | --- | --- |
+| result | learned "unknown" row | learned row | zero row | **NaN** | **NaN** |
+
+And in a real run, instrumenting the policy output over 200 decision steps × 28 envs:
+
+| code list | max action card id | policy rows containing NaN |
+| --- | --- | --- |
+| `data/pilot-864/code_list.txt` | 864 | 0 / 5600 |
+| vendored `scripts/code_list.txt` | 13420 | **5598 / 5600 (100%)** |
+
+So the 0.496 baseline is not a card-blind Pilot making uninformed-but-real decisions. It is a Pilot
+whose logits are entirely NaN, where `probs.argmax(axis=1)` returns 0 without raising — **the
+"blind" arm always plays the first legal action**, and that is worth ~0.50 against the greedy bot.
+
+Two consequences worth carrying:
+
+- **There is no graceful degradation at the pool boundary.** A single out-of-pool id does not
+  cost a little accuracy; it NaNs that env's entire decision. Any future widening of the pool,
+  deck injection of an out-of-pool card, or checkpoint swap is a hard error, not a soft one.
+- **`argmax` over NaN is the silent part.** Nothing in the stack complains. `eval.py` and
+  `battle.py` now raise on a NaN policy row, naming the max card id and the table size. That guard
+  fires in ~2 seconds on the vendored list; it would have caught phase 0's original close.
+
+### Where card ids actually enter the model
+
+Worth recording because it is not obvious from the feature layout: `_set_obs_cards` computes a
+`card_id` per card but calls `_set_obs_card_(f_cards, offset, c, hide)` *without* it, so columns
+0–1 of `cards_` are always zero and the per-card `x_id` embedding is always the "unknown" row.
+Card identity reaches the policy only through `actions_` and `h_actions_` (`action.cid_`, set by
+`c_get_card_id`), gathered from the same table. This is upstream behaviour (`04e61b9`), not a
+cherry-pick artifact. It means the pool boundary is enforced at *action* construction — which is
+also where `c_get_card_id` throws — and that an id probe should read `actions_`, not `cards_`.
+
+## 6. Why the tail can no longer bite
+
+The three abort sites in `ygopro.h` all fire on something the code list omits:
+`card_reader_callback` (card data for a script-requested code), `c_get_card_id` (an id for a card
+being acted on or announced), `script_reader_callback` (a Lua path never preloaded). All three are
+now decidable before a duel runs, and `tools/gen_code_list.py --check` decides them:
+
+- the committed code list covers `cards.cdb` **exactly** — 13,473 codes, 0 missing, 0 extra — so no
+  code in the database can be requested and missed;
+- all 203 distinct `Duel.CreateToken` codes in `vendor/ygopro-scripts` are in the database;
+- `vendor/ygopro-scripts` contains no `Duel.LoadScript` calls and exactly three shared libraries
+  (`constant.lua`, `utility.lua`, `procedure.lua`) — the three `init_module` preloads;
+- every `has_script` flag matches whether `c<code>.lua` exists (0 mismatches both ways).
+
+The residual risk is a *new* database or script bundle: both are submodule bumps, and `--check`
+fails on them.
+
 ## Reproducing
 
 Build per `docs/build-ygoenv.md`, then from `vendor/ygo-agent/scripts` with that venv active:
 
 ```bash
-python tools/gen_code_list.py --check          # from the repo root
+python tools/gen_code_list.py --check          # from the repo root: pre-flights the executor
 python -u eval.py --checkpoint checkpoints/0546_22750M.flax_model \
   --code_list_file ../../../data/pilot-864/code_list.txt \
   --num_episodes 1024 --num_envs 28 --env_threads 28 --seed 0

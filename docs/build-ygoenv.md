@@ -33,8 +33,10 @@ needs it. Fixing it is phase-2 work — see `YGO-ExodAI/ygo-agent` in ADR-0001.
 **Always pass `data/pilot-864/code_list.txt`.** The card ids the env emits are line numbers in
 `--code_list_file`, and the frozen Pilot's embedding table has room for 999 of them. With the
 vendored 13,472-line `scripts/code_list.txt`, 552 of the 604 cards in the shipped decks land past
-the end of that table, clamp, and reach the policy as the same zero "unknown" vector — a card-blind
-Pilot that still scores ~0.50 against the greedy bot. See ADR-0001; the pool is 864 cards.
+the end of that table. An out-of-range `nn.Embed` index is undefined behaviour, not an "unknown"
+fallback: measured here it returns **NaN**, every logit goes NaN, and `probs.argmax` silently plays
+action 0 forever — which scores ~0.50 against the greedy bot. `eval.py`/`battle.py` now raise on a
+NaN policy row instead. See ADR-0001; the pool is 864 cards.
 
 Our list is the Pilot's 864 codes in embedding-row order **followed by** the rest of the vendored
 list. The tail is not optional: `init_module` builds `cards_data_` from this file alone, and
@@ -42,7 +44,14 @@ list. The tail is not optional: `init_module` builds `cards_data_` from this fil
 file never listed. An 864-line file dies mid-run on `[card_reader_callback] Card not found:
 40005099` ("Shiranui Style Synthesis" — a card no shipped `.ydk` plays, but a Shiranui script
 references). Codes past line 999 gather to a zero row, which is what an out-of-pool card should be.
-Regenerate with `python tools/gen_code_list.py`; `--check` fails if the committed file is stale.
+Codes past line 999 never reach the policy anyway: measured over 400 episodes across the 33 shipped
+decks, the largest card id the model ever sees is 864.
+
+Regenerate with `python tools/gen_code_list.py`; **`--check` is the pre-flight for the whole
+executor** — it fails if a committed file is stale, if the code list does not cover `cards.cdb`
+exactly (the condition behind all three `ygopro.h` abort sites), or if a Lua shared library appears
+that `init_module` does not preload. It also emits `data/pilot-864/pool.txt`, the 864 pool codes on
+their own, so no caller has to remember to slice the first 864 lines.
 
 ```bash
 cd scripts
