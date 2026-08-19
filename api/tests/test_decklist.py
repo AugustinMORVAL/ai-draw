@@ -95,3 +95,21 @@ def test_a_shipped_seed_deck_round_trips(index):
     assert len(parsed.main) == 42
     assert len(parsed.extra) == 14
     assert parsed.unresolved == []
+
+
+def test_a_four_digit_code_is_a_card_not_a_typo(index):
+    """"Labrynth Cooclock" is code 2511, the shortest passcode in the pool.
+
+    A five-digit floor on the code pattern sent it to the name matcher, where a
+    number matches nothing, so a `.ydk` carrying it came back one card short with
+    "no card is named '2511'" against it.
+    """
+    parsed = parse("#main\n2511\n", index)
+    assert parsed.main == [2511]
+    assert parsed.unresolved == []
+
+
+def test_a_number_no_card_uses_is_still_read_as_a_code(index):
+    parsed = parse("999999999\n", index)
+    assert parsed.main == [999999999], "legality says it is unknown; parsing does not"
+    assert parsed.unresolved == []

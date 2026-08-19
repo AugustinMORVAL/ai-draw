@@ -21,7 +21,12 @@ from .models import CardSection, UnresolvedLine
 # "3x Ash Blossom", "3 Ash Blossom", "Ash Blossom x3", "Ash Blossom (3)"
 _PREFIX_COUNT = re.compile(r"^\s*(\d{1,2})\s*[x*]?\s+(.+?)\s*$", re.IGNORECASE)
 _SUFFIX_COUNT = re.compile(r"^\s*(.+?)\s*(?:[x*]\s*(\d{1,2})|\((\d{1,2})\))\s*$", re.IGNORECASE)
-_CODE = re.compile(r"^\s*(\d{5,9})\s*$")
+# A bare number on its own line is always a code attempt. The lower bound matters:
+# "Labrynth Cooclock" is code 2511, and a 5-digit floor made it the one pool card
+# a .ydk could not paste -- it fell through to the name matcher and came back as a
+# typo. The upper bound stays past the longest real code (8 digits) so an
+# out-of-range number is reported as a card nobody has, not as a misspelling.
+_CODE = re.compile(r"^\s*(\d{1,9})\s*$")
 
 MAX_LINES = 400
 
