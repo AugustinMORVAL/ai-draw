@@ -33,7 +33,7 @@ Each slice is done when its manual test passes by hand in a browser. Estimates a
 | 3 | Refine job: submit, queue position, live progress, result | Submit a deck, watch swap-by-swap progress, see the final diff and which cards changed | #6, #7 | 2 |
 | 4 | Test job: Gate evaluation vs the Gauntlet | Run a test, get a win rate with its matchup breakdown, labelled Gate fidelity | #3, #8 | 1.5 |
 | 5 | Deck library: save, name, version, compare | Save two decks, diff them, see each one's last Gate result | - | 1.5 |
-| 6 | Duel replay: watch one duel the deck played | Open a duel from a test result, step through the action log | #3 | 2 |
+| 6 ~ | Duel replay: watch one duel the deck played | Open a duel from a refine result, step through the action log | #3 | 2 |
 | 7 | Real executor: swap `FakeExecutor` for `YgoenvExecutor` | Every slice above still passes its manual test, now against real duels | #3 | 1.5 |
 | 8 | Beta hardening: shared-key access, rate limit, queue fairness | Two users submit at once; both see honest queue positions | - | 1 |
 
@@ -63,7 +63,62 @@ behind each phase.
 
 ## Status
 
-**Slices 0 and 1 are done.**
+**Slices 0 and 1 are done. Slice 6 is done against the fake executor.**
+
+### The interface: a deck editor, not a form
+
+The app was a form with a paste box beside a job list. It is now three surfaces built
+the way the clients these users already have are built (EDOPro, MDPro3, Master Duel):
+
+- **Deck** -- a left card inspector carrying the printed card text, a centre grid of
+  card art with one slot per copy, and a right card browser with the filter strip.
+  Cards are added and removed by clicking; the `.ydk` text is still the deck's one
+  definition and is still parsed server-side, so a visual edit rewrites the text
+  rather than forking a second answer to "what is in this deck".
+- **Duel farm** -- the queue and one job, with each mutation drawn as the two cards it
+  traded rather than as two passcodes.
+- **Replays** -- the duel mat, life point bars, a transport, and the action log. All
+  four read from a single index into the log, so they cannot disagree.
+
+Two things carry the look, and both are honest about where they come from:
+
+- **Card art is fetched by the browser** from `images.ygoprodeck.com`, falling back to
+  the mycard host and then to a frame-coloured plate with the card's name on it. The
+  API never touches the network and neither do the tests; a box with no egress runs
+  the whole app on plates.
+- **Card text is now in the index.** `tools/gen_card_index.py` reads `texts.desc` out
+  of the same pinned `cards.cdb`, for pool cards only (`cards.json` grows 670 KB to
+  928 KB). Carrying it for all 12,384 known cards would quadruple the file to buy
+  nothing: the inspector never opens a card the Pilot cannot see.
+
+Fonts are self-hosted in `ui/public/fonts` (92 KB), so the container needs no CDN.
+
+### Slice 6 -- duel replay, on the fake executor
+
+`DuelExecutor` grew one method, `replays(deck, count)`, and `FakeExecutor` implements
+it by writing a duel log out of the deck's own cards: real passcodes, real Gauntlet
+opponent names, life points that only fall and that reach zero on the turn the winner
+takes. It is fabricated, it says so on every replay (`live: false`) and in a banner
+above the mat, and `YgoenvExecutor` will implement the same method against real duels.
+
+- A refine job keeps `REPLAY_SAMPLE = 6` duels of its *final* deck, in its result.
+  Sampled, never complete: a refine job screens thousands and storing every log would
+  dwarf the job database.
+- `GET /api/jobs/{id}/replays` lists them without logs; `/{index}` returns one with
+  its log. A job that has not finished answers 409, not an empty list.
+- `GET /api/pool` returns all 864 cards in one response, so the editor filters
+  locally instead of asking the server on every keystroke. Cards *outside* the pool
+  stay a server question: `/api/cards?q=` still answers it, and still answers with the
+  card marked rather than missing.
+
+### One bug this slice found
+
+**A four-digit passcode could not be pasted.** `_CODE` in `decklist.py` required five
+to nine digits, and "Labrynth Cooclock" is code `2511`. A `.ydk` carrying it came back
+one card short, with "no card is named '2511'" against it -- and Labrynth is one of the
+33 decks the executor ships with. The floor is gone. It also made
+`test_the_random_deck_the_app_submits_is_legal` fail about one run in twelve, which is
+how it surfaced.
 
 ### Slice 1 — deck input, legality, Masking preview
 

@@ -14,6 +14,10 @@ from .cards import card_index
 from .executor import DuelExecutor, _hash_unit
 from .models import Deck, Fidelity, Progress, RefineParams, RefineResult, Swap
 
+#: How many of the final deck's duels are kept with their action logs. A refine
+#: job screens thousands; these are the ones a user can actually sit and watch.
+REPLAY_SAMPLE = 6
+
 Report = Callable[[Progress], Awaitable[None]]
 ShouldCancel = Callable[[], Awaitable[bool]]
 
@@ -114,6 +118,11 @@ async def run_refine(
             )
         )
 
+    await report(
+        Progress(step=total, total=total, message="Keeping a sample of the duels")
+    )
+    replays = await executor.replays(deck, count=REPLAY_SAMPLE)
+
     return RefineResult(
         deck=deck,
         swaps=swaps,
@@ -121,4 +130,5 @@ async def run_refine(
         win_rate=current.win_rate,
         fidelity=Fidelity.SCREENING,
         live=executor.live,
+        replays=replays,
     )

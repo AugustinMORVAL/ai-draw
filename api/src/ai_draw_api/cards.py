@@ -85,6 +85,7 @@ class CardIndex:
                 defense=entry["def"],
                 limit=entry["limit"],
                 in_pool=True,
+                desc=entry.get("desc") or None,
             )
         self._known: dict[int, str] = {
             int(code): name for code, name in payload["known"].items()

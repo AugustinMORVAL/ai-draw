@@ -1,37 +1,267 @@
 @import 'tailwindcss';
 
-@theme {
-  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+/* Self-hosted, so a Docker build with no egress still renders correctly.
+   Latin subsets only: the card index is the executor's en-US database. */
+@font-face {
+  font-family: 'Chakra Petch';
+  src: url('/fonts/chakra-petch-500.woff2') format('woff2');
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Chakra Petch';
+  src: url('/fonts/chakra-petch-600.woff2') format('woff2');
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Chakra Petch';
+  src: url('/fonts/chakra-petch-700.woff2') format('woff2');
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/fonts/geist.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('/fonts/geist-mono.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
 
-  --color-ink: #0b0c10;
-  --color-panel: #121419;
-  --color-panel-2: #171a21;
-  --color-line: #242832;
-  --color-line-soft: #1c2029;
-  --color-fg: #e7e9ee;
-  --color-muted: #8b93a5;
-  --color-faint: #5d6577;
-  --color-accent: #7c5cff;
-  --color-accent-soft: #a08cff;
-  --color-good: #3fbf7f;
-  --color-warn: #e0a53c;
-  --color-bad: #e0575b;
+@theme {
+  --font-sans: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  /* Squared-off and technical: the duel-disk register. Headings, seat names,
+     life point totals. Never body copy. */
+  --font-display: 'Chakra Petch', 'Geist', system-ui, sans-serif;
+
+  /* The field, darkest to lightest. Deep navy rather than neutral grey: every
+     surface in this app sits under card art, and warm art needs a cold ground. */
+  --color-void: #04060c;
+  --color-field: #080c16;
+  --color-panel: #0d1322;
+  --color-panel-2: #121a2c;
+  --color-slot: #0a0f1c;
+  --color-edge: #22304c;
+  --color-edge-soft: #16203a;
+
+  --color-fg: #e9edf7;
+  --color-muted: #96a3bf;
+  --color-faint: #64728f;
+
+  /* One accent for the whole app. Gold, because this is Yu-Gi-Oh and gold is
+     what the game trims itself in. Nothing else competes for emphasis. */
+  --color-gold: #e0b755;
+  --color-gold-dim: #9d7c34;
+  --color-gold-deep: #4a3a17;
+
+  --color-good: #3fc98a;
+  --color-warn: #e88b3c;
+  --color-bad: #ef4d5a;
+
+  /* Seats. Domain colors, not a second accent: the candidate deck is always the
+     gold side and the Gauntlet is always the blue side, in life point bars, in
+     the field, and in the action log. */
+  --color-seat-self: #e0b755;
+  --color-seat-foe: #5b8ff5;
+
+  /* Card frames, as the game prints them. Domain data too: a Fusion monster is
+     purple everywhere it appears, and reading a deck by color is how players
+     actually scan one. */
+  --color-frame-normal: #c8a878;
+  --color-frame-effect: #c26f36;
+  --color-frame-ritual: #5c74b8;
+  --color-frame-fusion: #8c4fa0;
+  --color-frame-synchro: #d5d8de;
+  --color-frame-xyz: #2f3540;
+  --color-frame-link: #2f68b5;
+  --color-frame-pendulum: #4aa08a;
+  --color-frame-spell: #199e8c;
+  --color-frame-trap: #b43a90;
+  --color-frame-token: #7d879c;
+  --color-frame-unknown: #3b465e;
+
+  /* One radius scale: everything is near-square. Panels get a cut corner
+     instead of a round one (see .bevel), controls get 2px, nothing is a pill. */
+  --radius-slot: 2px;
+
+  --ease-out-duel: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @layer base {
   html {
     color-scheme: dark;
   }
+
   body {
-    @apply bg-ink text-fg font-sans antialiased;
-    font-feature-settings: 'cv02', 'cv03', 'ss01';
+    @apply bg-void text-fg font-sans antialiased;
+    /* A cold vignette under everything, so panels read as lit surfaces on a
+       dark field rather than as boxes on flat black. */
+    background-image:
+      radial-gradient(90rem 50rem at 50% -20%, #12203c 0%, transparent 60%),
+      radial-gradient(60rem 40rem at 100% 100%, #10182c 0%, transparent 55%);
+    background-attachment: fixed;
   }
+
   ::selection {
-    background: color-mix(in oklab, var(--color-accent) 40%, transparent);
+    background: color-mix(in oklab, var(--color-gold) 35%, transparent);
   }
+
+  /* Scrollbars are everywhere in a deck editor. Make them part of the chrome. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-edge) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-edge);
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--color-gold-dim);
+    background-clip: content-box;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-gold);
+    outline-offset: 1px;
+  }
+}
+
+/* The panel bevel: one cut corner, the shape every console in this genre uses.
+   Applied to panels and primary actions only, so it stays a signal. */
+@utility bevel {
+  clip-path: polygon(
+    10px 0,
+    100% 0,
+    100% calc(100% - 10px),
+    calc(100% - 10px) 100%,
+    0 100%,
+    0 10px
+  );
+}
+
+@utility bevel-sm {
+  clip-path: polygon(
+    6px 0,
+    100% 0,
+    100% calc(100% - 6px),
+    calc(100% - 6px) 100%,
+    0 100%,
+    0 6px
+  );
 }
 
 @utility tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* Small caps labels. Used for panel titles and stat labels, not for decoration. */
+@utility label {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* A faint horizontal scanline field. One fixed element, pointer-events-none, so
+   it never repaints with scroll. */
+@utility scanlines {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgb(255 255 255 / 0.018) 0px,
+    rgb(255 255 255 / 0.018) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+@layer components {
+  /* Card slots lift toward the cursor. The only hover physics in the app: it
+     tells you a card is grabbable, which in a deck editor is the whole verb. */
+  .card-slot {
+    transition:
+      transform 160ms var(--ease-out-duel),
+      box-shadow 160ms var(--ease-out-duel),
+      filter 160ms var(--ease-out-duel);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .card-slot:hover {
+      transform: translateY(-3px) scale(1.03);
+      z-index: 5;
+    }
+  }
+
+  .card-slot:hover {
+    box-shadow:
+      0 0 0 1px var(--color-gold),
+      0 10px 24px -8px rgb(0 0 0 / 0.8);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Cards arrive in a stagger when a deck loads, the way a deck deals out.
+     Index-driven delay, capped, so a 60-card deck does not take a second. */
+  @keyframes deal-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  .deal-in {
+    animation: deal-in 260ms var(--ease-out-duel) both;
+    animation-delay: calc(min(var(--i, 0) * 12ms, 420ms));
+  }
+
+  /* A running job is the one thing on screen that is genuinely in motion. */
+  @keyframes sweep {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(100%);
+    }
+  }
+
+  .sweep::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklab, var(--color-gold) 35%, transparent),
+      transparent
+    );
+    animation: sweep 1.6s linear infinite;
+  }
+
+  @keyframes life-flash {
+    from {
+      background-color: color-mix(in oklab, var(--color-bad) 45%, transparent);
+    }
+    to {
+      background-color: transparent;
+    }
+  }
+
+  .life-flash {
+    animation: life-flash 500ms var(--ease-out-duel);
+  }
 }

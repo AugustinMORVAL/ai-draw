@@ -18,6 +18,8 @@ from .legality import review
 from .models import (
     Card,
     DeckReport,
+    DuelReplay,
+    DuelReplaySummary,
     Health,
     Job,
     JobKind,
@@ -88,6 +90,17 @@ def create_app(
             q, limit=min(max(limit, 1), 100), unsupported=unsupported
         )
 
+    @app.get("/api/pool", response_model=list[Card])
+    async def get_pool() -> list[Card]:
+        """Every card the frozen Pilot can represent, in one response.
+
+        The pool is 864 cards and it never changes at runtime, so the deck editor
+        holds it and filters locally instead of asking the server on every keystroke.
+        Cards *outside* the pool are still a server question: `/api/cards?q=` answers
+        it, and answers it with the card marked rather than missing (ADR-0005).
+        """
+        return list(card_index().pool.values())
+
     @app.get("/api/cards/{code}", response_model=Card)
     async def get_card(code: int) -> Card:
         card = card_index().get(code)
@@ -130,6 +143,31 @@ def create_app(
         if job is None:
             raise HTTPException(status_code=404, detail="no such job")
         return job
+
+    async def _replays_of(job_id: str) -> list[dict]:
+        """The duel logs a finished job kept. 404 if the job never got that far."""
+        job = await store.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="no such job")
+        if job.result is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"job is {job.state.value}, so it has no duels to replay yet",
+            )
+        return job.result.get("replays", [])
+
+    @app.get("/api/jobs/{job_id}/replays", response_model=list[DuelReplaySummary])
+    async def list_replays(job_id: str) -> list[DuelReplaySummary]:
+        """The kept duels, without their logs. A sample, never every duel run."""
+        return [DuelReplaySummary.model_validate(r) for r in await _replays_of(job_id)]
+
+    @app.get("/api/jobs/{job_id}/replays/{index}", response_model=DuelReplay)
+    async def get_replay(job_id: str, index: int) -> DuelReplay:
+        replays = await _replays_of(job_id)
+        match = next((r for r in replays if r["index"] == index), None)
+        if match is None:
+            raise HTTPException(status_code=404, detail=f"no replay {index} on this job")
+        return DuelReplay.model_validate(match)
 
     @app.post("/api/jobs/{job_id}/cancel", response_model=Job)
     async def cancel_job(job_id: str) -> Job:

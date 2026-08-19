@@ -2,25 +2,31 @@ import type { JobState } from '@/lib/api'
 import { cn } from '@/lib/cn'
 
 const STYLES: Record<JobState, string> = {
-  queued: 'border-line text-muted',
-  running: 'border-accent/50 text-accent-soft bg-accent/10',
-  succeeded: 'border-good/40 text-good bg-good/10',
-  failed: 'border-bad/40 text-bad bg-bad/10',
-  cancelled: 'border-line text-faint',
+  queued: 'border-edge text-muted',
+  running: 'border-gold/50 bg-gold/10 text-gold',
+  succeeded: 'border-good/40 bg-good/10 text-good',
+  failed: 'border-bad/40 bg-bad/10 text-bad',
+  cancelled: 'border-edge text-faint',
 }
 
-export function StateBadge({ state, className }: { state: JobState; className?: string }) {
+export function StateBadge({
+  state,
+  className,
+}: {
+  state: JobState
+  className?: string
+}) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5',
-        'font-mono text-[10px] uppercase tracking-[0.1em]',
+        'inline-flex items-center gap-1.5 border px-1.5 py-0.5',
+        'font-display text-[9.5px] font-semibold tracking-[0.14em] uppercase',
         STYLES[state],
         className,
       )}
     >
       {state === 'running' && (
-        <span className="size-1.5 animate-pulse rounded-full bg-accent-soft" />
+        <span className="size-1.5 animate-pulse bg-gold" />
       )}
       {state}
     </span>

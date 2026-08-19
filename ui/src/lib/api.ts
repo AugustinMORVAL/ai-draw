@@ -29,6 +29,8 @@ export interface Card {
   limit: number
   /** Stated by the server, never inferred here: can the frozen Pilot represent it? */
   in_pool: boolean
+  /** The printed card text. Pool cards only, so the inspector can read it out. */
+  desc: string | null
 }
 
 export type CardIssue =
@@ -108,6 +110,41 @@ export interface RefineResult {
   win_rate: number
   fidelity: Fidelity
   live: boolean
+  /** A sample of the final deck's duels, not all of them. */
+  replays: DuelReplaySummary[]
+}
+
+export type DuelSeat = 'candidate' | 'opponent'
+
+export type DuelPhase = 'draw' | 'standby' | 'main1' | 'battle' | 'main2' | 'end'
+
+export interface DuelEvent {
+  index: number
+  turn: number
+  seat: DuelSeat
+  phase: DuelPhase
+  action: string
+  card: number | null
+  target: number | null
+  text: string
+  /** Life totals *after* this event, so scrubbing never has to replay from zero. */
+  life_candidate: number
+  life_opponent: number
+}
+
+export interface DuelReplaySummary {
+  index: number
+  opponent: string
+  going_first: DuelSeat
+  winner: DuelSeat
+  turns: number
+  events: number
+  /** False means the fake executor wrote this log and no duel happened. */
+  live: boolean
+}
+
+export interface DuelReplay extends DuelReplaySummary {
+  log: DuelEvent[]
 }
 
 export interface Progress {
@@ -156,6 +193,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<Health>('/health'),
+  /** All 864 at once. The pool never changes at runtime, so the editor holds it. */
+  pool: () => request<Card[]>('/pool'),
   jobs: () => request<Job[]>('/jobs'),
   job: (id: string) => request<Job>(`/jobs/${id}`),
   submitRefine: (body: {
@@ -171,4 +210,7 @@ export const api = {
       body: JSON.stringify({ text }),
     }),
   cancel: (id: string) => request<Job>(`/jobs/${id}/cancel`, { method: 'POST' }),
+  replays: (jobId: string) => request<DuelReplaySummary[]>(`/jobs/${jobId}/replays`),
+  replay: (jobId: string, index: number) =>
+    request<DuelReplay>(`/jobs/${jobId}/replays/${index}`),
 }

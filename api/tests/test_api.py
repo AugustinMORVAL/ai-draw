@@ -134,3 +134,13 @@ async def test_the_random_deck_the_app_submits_is_legal(client):
     text = "\n".join(str(code) for code in codes)
     report = (await client.post("/api/decks/parse", json={"text": text})).json()
     assert report["legal"] is True, report["flags"]
+
+
+async def test_the_whole_pool_comes_back_in_one_response(client):
+    """The deck editor holds the pool and filters it locally."""
+    pool = (await client.get("/api/pool")).json()
+    assert len(pool) == 864
+    assert all(card["in_pool"] for card in pool)
+    assert sum(card["section"] == "main" for card in pool) == 411
+    ash = next(c for c in pool if c["name"] == 'Maxx "C"')
+    assert ash["desc"], "the inspector reads the card text out of this"

@@ -152,9 +152,9 @@ def _mask(index: CardIndex, main: Counter[int]) -> MaskPreview:
 
     for code, card in index.pool.items():
         if card.section is CardSection.TOKEN:
-            groups["Tokens — never in a deck"] += 1
+            groups["Tokens, which are made and never deckable"] += 1
         elif card.section is CardSection.EXTRA:
-            groups["Extra Deck — phase 1 builds main decks only"] += 1
+            groups["Extra Deck: phase 1 builds main decks only"] += 1
         elif card.limit == 0:
             groups["Forbidden on the banlist"] += 1
         elif main.get(code, 0) >= card.limit:

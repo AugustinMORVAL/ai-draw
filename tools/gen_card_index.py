@@ -10,7 +10,8 @@ fails if the two disagree.
 Two tiers, because the domain has two tiers:
 
   ``pool``   the 864 codes the frozen Pilot can represent, with the metadata the UI
-             and the Masking preview need (name, kind, race, deck section, limit).
+             and the Masking preview need (name, kind, race, deck section, limit)
+             and the printed card text the inspector reads out.
   ``known``  every other card in `cards.cdb`, name only. Being here means the C++
              core knows the card and the Pilot does not -- exactly the distinction
              CONTEXT.md warns not to collapse. It is what lets the app say
@@ -203,7 +204,7 @@ def build() -> dict:
         row[0]: row
         for row in connection.execute(
             "select d.id, t.name, d.type, d.race, d.attribute, d.level, d.atk, "
-            "d.def, d.alias from datas d join texts t on t.id = d.id"
+            "d.def, d.alias, t.desc from datas d join texts t on t.id = d.id"
         )
     }
     connection.close()
@@ -217,7 +218,18 @@ def build() -> dict:
 
     pool: dict[str, dict] = {}
     for code in pool_codes:
-        _, name, type_bits, race, attribute, level, atk, defense, _alias = rows[code]
+        (
+            _,
+            name,
+            type_bits,
+            race,
+            attribute,
+            level,
+            atk,
+            defense,
+            _alias,
+            desc,
+        ) = rows[code]
         monster = bool(type_bits & TYPE_MONSTER)
         pool[str(code)] = {
             "name": name,
@@ -230,6 +242,11 @@ def build() -> dict:
             "atk": atk if monster else None,
             "def": defense if monster and not (type_bits & TYPE_LINK) else None,
             "limit": limits.get(code, 3),
+            # The printed card text. Only the pool carries it: it is what the card
+            # inspector reads out, and no UI ever inspects a card the Pilot cannot
+            # see. Carrying it for all 12,384 known cards would quadruple the index
+            # to buy nothing.
+            "desc": " ".join((desc or "").split()),
         }
 
     in_pool = set(pool_codes)

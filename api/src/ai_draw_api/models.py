@@ -61,6 +61,9 @@ class Card(BaseModel):
     defense: int | None = None
     limit: int = 3
     in_pool: bool
+    #: The printed card text. Pool cards only: the inspector never opens a card the
+    #: Pilot cannot see, so the other 12,384 are carried by name alone.
+    desc: str | None = None
 
 
 class CardIssue(str, Enum):
@@ -180,6 +183,10 @@ class RefineResult(BaseModel):
     win_rate: float
     fidelity: Fidelity = Fidelity.SCREENING
     live: bool
+    #: A sample of the duels the *final* deck played, kept so the run can be watched
+    #: rather than only counted. Sampled, not complete: a refine job screens
+    #: thousands of duels and storing every log would dwarf the job database.
+    replays: list["DuelReplay"] = []
 
 
 class Progress(BaseModel):
@@ -220,3 +227,56 @@ class Health(BaseModel):
     main_deck_pool_size: int
     banlist: str
     version: str
+
+
+class DuelSeat(str, Enum):
+    """Who did something. The candidate deck always sits in `CANDIDATE`."""
+
+    CANDIDATE = "candidate"
+    OPPONENT = "opponent"
+
+
+class DuelPhase(str, Enum):
+    DRAW = "draw"
+    STANDBY = "standby"
+    MAIN1 = "main1"
+    BATTLE = "battle"
+    MAIN2 = "main2"
+    END = "end"
+
+
+class DuelEvent(BaseModel):
+    """One step of a duel, as the replay viewer walks it.
+
+    `life_candidate` / `life_opponent` are the totals *after* the event, so a viewer
+    scrubbing to any index can paint the board without replaying from zero.
+    """
+
+    index: int
+    turn: int
+    seat: DuelSeat
+    phase: DuelPhase
+    action: str
+    card: int | None = None
+    target: int | None = None
+    text: str
+    life_candidate: int
+    life_opponent: int
+
+
+class DuelReplaySummary(BaseModel):
+    """A duel, without its events. What the replay list shows."""
+
+    index: int
+    opponent: str
+    going_first: DuelSeat
+    winner: DuelSeat
+    turns: int
+    events: int
+    live: bool
+
+
+class DuelReplay(DuelReplaySummary):
+    """A duel with its full action log."""
+
+    log: list[DuelEvent] = []

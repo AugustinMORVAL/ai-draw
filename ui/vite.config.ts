@@ -10,7 +10,12 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      // Overridable so the dev server can point at an API on another port while
+      // the container stack keeps 8000.
+      '/api': {
+        target: process.env.VITE_API_TARGET ?? 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
     },
   },
 })
