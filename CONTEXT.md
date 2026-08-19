@@ -7,7 +7,7 @@ RL-driven Yu-Gi-Oh! deckbuilding ecosystem: a Builder that constructs and refine
 ### Cards
 
 **Supported pool**:
-The 864 cards the frozen Pilot can represent — the codes of `embed864.pkl`, in that file's order, committed as `data/pilot-864/code_list.txt`. Every phase-1 card decision ranges over exactly these: the Builder's action space, the Damaged deck's replacement draws, and Warm-start's decklist filter. Widening it means training a new Pilot, not editing a file.
+The 864 cards the frozen Pilot can represent — the codes of `embed864.pkl`, in that file's order, committed as the **first 864 lines** of `data/pilot-864/code_list.txt`. That file is longer than the pool on purpose (the executor's core aborts on any code it was never handed, including cards no deck plays), so pool membership means *line ≤ 864*, not *present in the file*. Every phase-1 card decision ranges over exactly these: the Builder's action space, the Damaged deck's replacement draws, and Warm-start's decklist filter. Widening it means training a new Pilot, not editing a file.
 _Avoid_: card pool, code list (ambiguous with the executor's 13,472-card ceiling, which is a phase-2 target)
 
 **Candidate deck**:
