@@ -1,4 +1,4 @@
-# vrains
+# ai-draw
 
 RL-driven Yu-Gi-Oh! deckbuilding ecosystem: a Builder that constructs and refines decks, evaluated by simulated duels piloted by an RL agent, under user-supplied constraints.
 

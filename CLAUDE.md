@@ -1,4 +1,4 @@
-# vrains
+# ai-draw
 
 RL-driven Yu-Gi-Oh! deckbuilding ecosystem. See `CONTEXT.md` for the domain glossary.
 
