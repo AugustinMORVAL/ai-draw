@@ -1,15 +1,25 @@
-import { ArrowRight, Play } from 'lucide-react'
+import { ArrowRight, Minus, Play, Plus } from 'lucide-react'
 import { CardArt } from '@/components/card/CardArt'
 import { Button } from '@/components/ui/Button'
 import { StateBadge } from '@/components/ui/StateBadge'
-import type { Card, Constraint, Job, RefineResult, Swap } from '@/lib/api'
+import { Matchups } from '@/components/duel/Matchups'
+import type {
+  Card,
+  Constraint,
+  DeckChange,
+  DeckDiff,
+  Job,
+  JobSummary,
+  Swap,
+} from '@/lib/api'
 import { cn } from '@/lib/cn'
+import { useJob } from '@/lib/useJob'
 import { usePool } from '@/lib/usePool'
 
 const pct = (n: number) => `${(n * 100).toFixed(1)}%`
 const signed = (n: number) => `${n >= 0 ? '+' : ''}${(n * 100).toFixed(1)}`
 
-function when(job: Job) {
+function when(job: JobSummary) {
   return new Date(job.created_at * 1000).toLocaleTimeString(undefined, {
     hour: '2-digit',
     minute: '2-digit',
@@ -17,7 +27,7 @@ function when(job: Job) {
   })
 }
 
-function positionLabel(job: Job) {
+function positionLabel(job: JobSummary) {
   if (job.state === 'queued') return `#${job.queue_position} in queue`
   if (job.state === 'running') return `${job.progress.step}/${job.progress.total}`
   return when(job)
@@ -26,11 +36,19 @@ function positionLabel(job: Job) {
 /**
  * The interests the job ran under, spelled out.
  *
- * A refine result read months later has to say what it was asked for, or the deck
- * is unexplainable: every swap in the log was drawn from the mask this Constraint
- * defined, and the cards it ruled out never had a chance to appear.
+ * A result read months later has to say what it was asked for, or the deck is
+ * unexplainable: every swap in a refine log was drawn from the mask this Constraint
+ * defined, and the cards it ruled out never had a chance to appear. A test job
+ * masks nothing — there is no pick to mask — so the same sentence would be a lie,
+ * and the caption says which of the two happened.
  */
-function Interests({ constraint }: { constraint: Constraint }) {
+function Interests({
+  constraint,
+  kind,
+}: {
+  constraint: Constraint
+  kind: Job['kind']
+}) {
   const said = [
     ...(constraint.main_size !== null ? [`${constraint.main_size} cards`] : []),
     ...constraint.clauses.map(
@@ -41,7 +59,11 @@ function Interests({ constraint }: { constraint: Constraint }) {
   if (said.length === 0) return null
   return (
     <div className="border border-edge-soft bg-panel-2 px-3 py-2">
-      <div className="label text-faint">Interests, masked into every swap</div>
+      <div className="label text-faint">
+        {kind === 'test'
+          ? 'Interests this deck was built under'
+          : 'Interests, masked into every swap'}
+      </div>
       <div className="mt-1 flex flex-wrap gap-1.5">
         {said.map((phrase) => (
           <span
@@ -62,6 +84,101 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
       <div className="label text-faint">{label}</div>
       <div className="mt-1 font-display text-xl tabular text-fg">{value}</div>
       {hint && <div className="mt-0.5 text-[10.5px] text-faint">{hint}</div>}
+    </div>
+  )
+}
+
+/** One side of the diff: the cards that left, or the cards that arrived. */
+function DiffColumn({
+  title,
+  tone,
+  changes,
+  byCode,
+}: {
+  title: string
+  tone: 'out' | 'in'
+  changes: DeckChange[]
+  byCode: Map<number, Card>
+}) {
+  const Icon = tone === 'out' ? Minus : Plus
+  return (
+    <div className="min-w-0 px-3 py-2">
+      <div className="flex items-center gap-1.5">
+        <Icon size={11} className={tone === 'out' ? 'text-bad' : 'text-good'} />
+        <span className="label text-faint">{title}</span>
+        <span className="ml-auto font-mono text-[10px] tabular text-faint">
+          {changes.reduce((n, change) => n + change.count, 0)}
+        </span>
+      </div>
+      <ul className="mt-2 space-y-1.5">
+        {changes.map((change) => {
+          const card = byCode.get(change.card) ?? null
+          return (
+            <li key={change.card} className="flex items-center gap-2">
+              <CardArt
+                card={card}
+                code={change.card}
+                size="thumb"
+                className={cn(
+                  'h-10 w-7 shrink-0 border',
+                  tone === 'out' ? 'border-bad/40 opacity-55' : 'border-good/40',
+                )}
+              />
+              <span className="min-w-0 flex-1 truncate text-[11px] text-muted">
+                {card?.name ?? change.card}
+              </span>
+              {change.count > 1 && (
+                <span className="shrink-0 font-mono text-[10px] tabular text-faint">
+                  x{change.count}
+                </span>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+/**
+ * Which cards changed, as cards.
+ *
+ * Not the swap log: a card cut at step 3 and picked back up at step 17 is two
+ * mutations and no change. This is the deck a user takes away, against the one
+ * they sent, and it is the shorter of the two lists nearly every time.
+ */
+function Diff({
+  diff,
+  byCode,
+  running,
+}: {
+  diff: DeckDiff
+  byCode: Map<number, Card>
+  running: boolean
+}) {
+  const changed = diff.added.reduce((n, change) => n + change.count, 0)
+  return (
+    <div className="border border-edge-soft bg-panel-2">
+      <header className="flex items-baseline gap-2 border-b border-edge-soft px-3 py-1.5">
+        <h3 className="label text-faint">
+          {running ? 'Changed so far' : 'What changed'}
+        </h3>
+        <span className="ml-auto font-mono text-[10.5px] tabular text-faint">
+          {changed} of {changed + diff.unchanged} cards
+        </span>
+      </header>
+      {changed === 0 ? (
+        <p className="px-3 py-2.5 text-[11px] leading-relaxed text-faint">
+          {running
+            ? 'No swap has scored better than the deck you sent yet.'
+            : 'No mutation beat the deck you sent. It came back as it went in.'}
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 divide-x divide-edge-soft">
+          <DiffColumn title="Cut" tone="out" changes={diff.removed} byCode={byCode} />
+          <DiffColumn title="Added" tone="in" changes={diff.added} byCode={byCode} />
+        </div>
+      )}
     </div>
   )
 }
@@ -140,8 +257,19 @@ function JobDetail({
 
   const running = job.state === 'running'
   const cancellable = running || job.state === 'queued'
-  const result = job.result as RefineResult | null
-  const swaps = [...(result?.swaps ?? [])].reverse()
+  // A job's result is shaped by its kind, so a test job's matchups are not a refine
+  // job's swaps. `in` is the narrowing TypeScript can see; the kind is why it holds.
+  const result =
+    job.kind === 'refine' && job.result && 'swaps' in job.result ? job.result : null
+  const gate =
+    job.kind === 'test' && job.result && 'matchups' in job.result ? job.result : null
+  // A finished job reads from its result, a live one from the checkpoint the worker
+  // wrote after its last mutation. Same numbers, same shape, one screen: the swap
+  // log fills in as the job runs rather than appearing all at once at the end.
+  // A test job has no half worth showing -- it is one evaluation -- so it reports
+  // per opponent while it runs and answers all at once when it is done.
+  const progress = result ?? job.checkpoint
+  const swaps = [...(progress?.swaps ?? [])].reverse()
   const ratio =
     job.progress.total > 0 ? Math.min(job.progress.step / job.progress.total, 1) : 0
 
@@ -165,7 +293,9 @@ function JobDetail({
       </header>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-        {job.params.constraint && <Interests constraint={job.params.constraint} />}
+        {job.params.constraint && (
+          <Interests constraint={job.params.constraint} kind={job.kind} />
+        )}
 
         {job.state === 'queued' && (
           <p className="text-xs text-muted">
@@ -205,33 +335,38 @@ function JobDetail({
           </p>
         )}
 
-        {result && (
+        {job.kind === 'test' && gate === null && job.state === 'running' && (
+          <p className="text-[11.5px] leading-relaxed text-muted">
+            Gate evaluation faces the whole Gauntlet before it answers. The line
+            above is the last matchup it finished; the breakdown lands with the win
+            rate, because half a win rate is not a number.
+          </p>
+        )}
+
+        {gate && <Matchups result={gate} />}
+
+        {progress && (
           <>
             <div className="grid grid-cols-3 divide-x divide-edge-soft border border-edge-soft bg-panel-2">
               <Stat
                 label="Win rate"
-                value={pct(result.win_rate)}
-                hint={`${result.fidelity} fidelity`}
+                value={pct(progress.win_rate)}
+                hint={result ? `${result.fidelity} fidelity` : 'screening, so far'}
               />
               <Stat
                 label="Swaps kept"
-                value={`${result.accepted}/${result.swaps.length}`}
+                value={`${progress.swaps.filter((swap) => swap.accepted).length}/${progress.swaps.length}`}
               />
-              <Stat label="Deck size" value={String(result.deck.main.length)} />
+              <Stat label="Deck size" value={String(progress.deck.main.length)} />
             </div>
+
+            <Diff diff={progress.diff} byCode={byCode} running={running} />
 
             <p className="border-l-2 border-l-warn bg-warn/8 px-3 py-2 text-[11px] leading-relaxed text-warn">
               Screening win rates are noisy by design (4 to 6 points either way). They
               are refinement progress, not a claim about this deck's strength. Only
               Gate evaluation produces that number.
             </p>
-
-            {result.replays.length > 0 && (
-              <Button className="w-full" onClick={() => onWatch(job.id)}>
-                <Play size={12} />
-                Watch {result.replays.length} kept duels
-              </Button>
-            )}
 
             <div>
               <h3 className="label mb-1.5 text-faint">Mutations, newest first</h3>
@@ -242,6 +377,15 @@ function JobDetail({
               </ul>
             </div>
           </>
+        )}
+
+        {/* Both kinds keep the same sample, for the same reason: a win rate is
+            worth more watched than read. */}
+        {job.result && job.result.replays.length > 0 && (
+          <Button className="w-full" onClick={() => onWatch(job.id)}>
+            <Play size={12} />
+            Watch {job.result.replays.length} kept duels
+          </Button>
         )}
       </div>
     </div>
@@ -256,7 +400,7 @@ export function DuelFarm({
   onWatch,
   error,
 }: {
-  jobs: Job[]
+  jobs: JobSummary[]
   selectedId: string | null
   onSelect: (id: string) => void
   onCancel: (id: string) => void
@@ -264,7 +408,9 @@ export function DuelFarm({
   error: string | null
 }) {
   const { byCode } = usePool()
-  const selected = jobs.find((job) => job.id === selectedId) ?? null
+  // The list says where every job stands; this says what one job is doing. Only
+  // the job on screen pays for its swap log.
+  const watched = useJob(jobs.some((job) => job.id === selectedId) ? selectedId : null)
 
   return (
     <div className="grid min-h-0 gap-3 p-3 lg:h-[calc(100svh-3.5rem)] lg:grid-cols-[20rem_minmax(0,1fr)]">
@@ -305,6 +451,7 @@ export function DuelFarm({
                       {job.id}
                     </span>
                     <span className="block font-mono text-[10px] tabular text-faint">
+                      {job.kind === 'test' ? 'gate' : 'refine'} ·{' '}
                       {positionLabel(job)}
                     </span>
                   </span>
@@ -317,13 +464,13 @@ export function DuelFarm({
       </div>
 
       <div className="min-h-0">
-        {error && (
+        {(error ?? watched.error) && (
           <p className="mb-3 border-l-2 border-l-bad bg-bad/8 px-3 py-2 font-mono text-[11px] text-bad">
-            {error}
+            {error ?? watched.error}
           </p>
         )}
         <JobDetail
-          job={selected}
+          job={watched.job}
           byCode={byCode}
           onCancel={onCancel}
           onWatch={onWatch}

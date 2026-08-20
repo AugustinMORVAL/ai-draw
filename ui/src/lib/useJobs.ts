@@ -5,17 +5,22 @@ import {
   type Constraint,
   type Deck,
   type Health,
-  type Job,
+  type JobSummary,
 } from '@/lib/api'
 
-const POLL_MS = 700
+export const POLL_MS = 700
 
 /**
- * Polls the server for job state. Nothing about a job lives in this hook — the
+ * Polls the server for the queue. Nothing about a job lives in this hook — the
  * database is the truth, so a reload picks the same jobs back up mid-flight.
+ *
+ * Summaries only: what a job carries is fetched for the one job being watched,
+ * by `useJob`. The whole list is on this timer and a refine result holds six full
+ * duel logs, so polling those to draw a list of ids would cost the most and show
+ * the least.
  */
 export function useJobs() {
-  const [jobs, setJobs] = useState<Job[]>([])
+  const [jobs, setJobs] = useState<JobSummary[]>([])
   const [health, setHealth] = useState<Health | null>(null)
   const [offline, setOffline] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -73,6 +78,25 @@ export function useJobs() {
     [refresh],
   )
 
+  const submitTest = useCallback(
+    async (body: {
+      deck?: Deck | null
+      gate_duels: number
+      constraint?: Constraint | null
+    }) => {
+      setError(null)
+      try {
+        const job = await api.submitTest(body)
+        await refresh()
+        return job
+      } catch (e) {
+        setError(submitMessage(e))
+        return null
+      }
+    },
+    [refresh],
+  )
+
   const cancel = useCallback(
     async (id: string) => {
       try {
@@ -85,7 +109,7 @@ export function useJobs() {
     [refresh],
   )
 
-  return { jobs, health, offline, error, submitRefine, cancel, refresh }
+  return { jobs, health, offline, error, submitRefine, submitTest, cancel, refresh }
 }
 
 /**

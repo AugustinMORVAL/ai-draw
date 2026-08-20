@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from enum import Enum
+from math import sqrt
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class JobKind(str, Enum):
@@ -288,6 +289,51 @@ class Swap(BaseModel):
     accepted: bool
 
 
+class DeckChange(BaseModel):
+    """One card a job put in or took out, and how many copies of it."""
+
+    card: int
+    count: int = Field(ge=1)
+
+
+class DeckDiff(BaseModel):
+    """What a refine job changed, counted as cards rather than as mutations.
+
+    The swap log says what was *tried*; this says what *landed*. They disagree on
+    purpose: a card cut at step 3 and picked back up at step 17 is two swaps and no
+    change, and what a user takes away from a job is the deck, not the log.
+    """
+
+    added: list[DeckChange] = []
+    removed: list[DeckChange] = []
+    #: Copies both decks hold. With `added` it accounts for the whole final deck.
+    unchanged: int = 0
+
+    @property
+    def changed(self) -> int:
+        return sum(change.count for change in self.added)
+
+
+class RefineCheckpoint(BaseModel):
+    """A refine job's state between two mutations.
+
+    Written after every swap, for two readers that want exactly the same thing. The
+    browser watching the job: the swap log builds up live instead of arriving all at
+    once at the end. The worker after a restart: the job resumes at the mutation it
+    reached instead of paying for the ones it already ran (ADR-0005).
+    """
+
+    step: int
+    total: int
+    #: The best deck so far -- what the job would return if it stopped here.
+    deck: Deck
+    win_rate: float
+    swaps: list[Swap] = []
+    #: Against the deck that was submitted, live. Derived from the two decks by
+    #: `refine.deck_diff`, and carried so that every reader gets the same one.
+    diff: DeckDiff = DeckDiff()
+
+
 class RefineParams(BaseModel):
     deck: Deck
     mutations: int = Field(default=25, ge=1, le=200)
@@ -300,6 +346,12 @@ class RefineParams(BaseModel):
 
 class RefineResult(BaseModel):
     deck: Deck
+    #: The deck that was submitted. Kept beside the final one because a result read
+    #: months later has to be able to answer "changed from what?" on its own.
+    starting_deck: Deck
+    #: `starting_deck` against `deck`. Derivable, and derived once here, so the job
+    #: log and the screen a user reads cannot disagree about which cards moved.
+    diff: DeckDiff = DeckDiff()
     swaps: list[Swap]
     accepted: int
     win_rate: float
@@ -309,6 +361,88 @@ class RefineResult(BaseModel):
     #: rather than only counted. Sampled, not complete: a refine job screens
     #: thousands of duels and storing every log would dwarf the job database.
     replays: list["DuelReplay"] = []
+
+
+def wald_margin(wins: int, duels: int) -> float:
+    """The 95% band around a win rate measured over `duels` duels.
+
+    Binomial, so it ignores the variance Paired evaluation takes out: two decks
+    measured under the same Environment set are separated more sharply than this
+    band suggests, which is why the Delta score exists. As a statement about one
+    deck's *absolute* win rate it is the honest number, and it is the reason the
+    two fidelities have separate names -- at 500 duels the band is +/-4.4 points,
+    at the 50 duels one matchup gets it is +/-13.9, and at Screening's 100 it is
+    +/-9.8, wider than most swaps a refine job accepts.
+    """
+    if duels <= 0:
+        return 0.0
+    rate = wins / duels
+    return 1.96 * sqrt(rate * (1.0 - rate) / duels)
+
+
+class Matchup(BaseModel):
+    """One Gauntlet opponent's share of an evaluation.
+
+    The Gauntlet is ten fixed decks (CONTEXT.md), so a 500-duel Gate evaluation is
+    fifty duels each. `duels` rides on every row because it is what says how much
+    the row's win rate is worth.
+    """
+
+    opponent: str
+    duels: int
+    wins: int
+    win_rate: float
+    #: The same duels split by seat. ADR-0004 forces 50/50 first/second, and in
+    #: Master Duel Bo1 the seat is often worth more than the decklist, so one
+    #: averaged number would hide a deck that only wins on the play.
+    first_duels: int
+    first_wins: int
+
+    @computed_field
+    @property
+    def margin(self) -> float:
+        """This row's 95% band. Fifty duels is +/-14 points: read the ordering."""
+        return wald_margin(self.wins, self.duels)
+
+
+class GateParams(BaseModel):
+    """What a test job is asked for: a Gate evaluation of one deck.
+
+    `gate_duels` cannot go below 500. ADR-0003 defines Gate evaluation as 500+
+    paired duels, and a Gate-labelled number measured at Screening size is exactly
+    what the two fidelities have separate names to prevent.
+    """
+
+    deck: Deck
+    gate_duels: int = Field(default=500, ge=500, le=5000)
+    #: The record of what the deck was asked for. Nothing is masked here -- a test
+    #: mutates nothing -- but a win rate read months later has to say what the deck
+    #: it measured was built to be.
+    constraint: Constraint | None = None
+
+
+class GateResult(BaseModel):
+    """What a test job answers: one quotable win rate, and its duels.
+
+    `win_rate` is computed *from* the matchup rows, not beside them: a headline that
+    could disagree with its own breakdown is a headline nobody can check.
+    """
+
+    deck: Deck
+    win_rate: float
+    duels: int
+    fidelity: Fidelity = Fidelity.GATE
+    matchups: list[Matchup] = []
+    live: bool
+    #: A sample of the duels behind the number, kept so it can be watched and not
+    #: only read. Same sample a refine job keeps, for the same reason.
+    replays: list["DuelReplay"] = []
+
+    @computed_field
+    @property
+    def margin(self) -> float:
+        """The 95% band on the headline. Quoting the number means quoting this."""
+        return wald_margin(round(self.win_rate * self.duels), self.duels)
 
 
 class Progress(BaseModel):
@@ -328,7 +462,35 @@ class Job(BaseModel):
     progress: Progress = Progress()
     params: dict = {}
     result: dict | None = None
+    #: How far a running job has got, kind-shaped like `result` and for the same
+    #: reason: the store holds jobs, not refine jobs. A finished job that produced a
+    #: result has none -- the result supersedes it. A cancelled or failed one keeps
+    #: it, because it is the only record of the work that did happen.
+    checkpoint: dict | None = None
     error: str | None = None
+
+
+class JobSummary(BaseModel):
+    """A job as the queue list shows it: how far it got, and nothing it carries.
+
+    The list is polled while a job runs, and a refine result carries every duel log
+    the job kept. Sending fifty of those every 700 ms to draw a list of ids would be
+    the most expensive thing this app does, so the list says where each job stands
+    and `GET /api/jobs/{id}` says what it did.
+    """
+
+    id: str
+    kind: JobKind
+    state: JobState
+    created_at: float
+    started_at: float | None = None
+    finished_at: float | None = None
+    queue_position: int | None = None
+    progress: Progress = Progress()
+    error: str | None = None
+    #: How many kept duels this job's result carries. Counted in SQL, so the replay
+    #: picker can list the watchable jobs without a single log crossing the wire.
+    replays: int = 0
 
 
 class SubmitRefine(BaseModel):
@@ -338,6 +500,16 @@ class SubmitRefine(BaseModel):
     mutations: int = Field(default=25, ge=1, le=200)
     screening_duels: int = Field(default=100, ge=10, le=1000)
     #: Masks every swap, and builds the deck when none was given.
+    constraint: Constraint | None = None
+
+
+class SubmitTest(BaseModel):
+    """A test submission. Omit the deck to get one built, as a refine does."""
+
+    deck: Deck | None = None
+    gate_duels: int = Field(default=500, ge=500, le=5000)
+    #: Builds the deck when none was given, and is kept as the record of what was
+    #: asked for. A test masks nothing: there is no pick to mask.
     constraint: Constraint | None = None
 
 

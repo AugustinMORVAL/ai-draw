@@ -170,14 +170,72 @@ export interface Swap {
   accepted: boolean
 }
 
+export interface DeckChange {
+  card: number
+  count: number
+}
+
+/**
+ * What a job changed, counted as cards rather than as mutations.
+ *
+ * The swap log says what was *tried*; this says what *landed*. A card cut at step
+ * 3 and picked back up at step 17 is two swaps and no change.
+ */
+export interface DeckDiff {
+  added: DeckChange[]
+  removed: DeckChange[]
+  /** Copies both decks hold. With `added` it accounts for the whole final deck. */
+  unchanged: number
+}
+
 export interface RefineResult {
   deck: Deck
+  /** The deck that was submitted, so "changed from what?" has an answer here. */
+  starting_deck: Deck
+  diff: DeckDiff
   swaps: Swap[]
   accepted: number
   win_rate: number
   fidelity: Fidelity
   live: boolean
   /** A sample of the final deck's duels, not all of them. */
+  replays: DuelReplaySummary[]
+}
+
+/**
+ * One Gauntlet opponent's share of a Gate evaluation.
+ *
+ * `duels` rides on every row because it is what says how much the row is worth:
+ * ten fixed opponents means a 500-duel evaluation is fifty duels each, and fifty
+ * duels carries a ±14 point band. Read the ordering, not the digits.
+ */
+export interface Matchup {
+  opponent: string
+  duels: number
+  wins: number
+  win_rate: number
+  /** The same duels, split by seat: ADR-0004 forces the 50/50. */
+  first_duels: number
+  first_wins: number
+  /** This row's 95% band, computed server-side so one formula exists. */
+  margin: number
+}
+
+/**
+ * What a test job answers with: the one win rate in this app that may be quoted.
+ *
+ * `win_rate` is summed out of `matchups`, not carried beside them, so the headline
+ * can never disagree with the breakdown underneath it.
+ */
+export interface GateResult {
+  deck: Deck
+  win_rate: number
+  duels: number
+  fidelity: Fidelity
+  matchups: Matchup[]
+  /** The 95% band on the headline. Quoting the number means quoting this. */
+  margin: number
+  live: boolean
   replays: DuelReplaySummary[]
 }
 
@@ -220,6 +278,23 @@ export interface Progress {
   message: string
 }
 
+/**
+ * How far a running job has got, as the worker last wrote it.
+ *
+ * Written after every mutation, so the swap log on screen is the log the worker
+ * has actually made — it builds up as the job runs instead of arriving whole at
+ * the end. It is also what the worker resumes from after a restart, which is why
+ * there is only one of these and not a progress shape and a recovery shape.
+ */
+export interface RefineCheckpoint {
+  step: number
+  total: number
+  deck: Deck
+  win_rate: number
+  swaps: Swap[]
+  diff: DeckDiff
+}
+
 export interface Job {
   id: string
   kind: 'refine' | 'test'
@@ -233,10 +308,35 @@ export interface Job {
     deck?: Deck
     mutations?: number
     screening_duels?: number
+    /** Test jobs only. Never below 500: that is ADR-0003's floor for a Gate. */
+    gate_duels?: number
     constraint?: Constraint | null
   }
-  result: RefineResult | null
+  /** Shaped by `kind`: a refine job returns swaps, a test job returns matchups. */
+  result: RefineResult | GateResult | null
+  /** Null once a result replaces it, and on a job that never started one. */
+  checkpoint: RefineCheckpoint | null
   error: string | null
+}
+
+/**
+ * A job as the queue list shows it: where it stands, and nothing it carries.
+ *
+ * The list is polled while a job runs and a refine result holds six full duel
+ * logs, so the list says how far each job got and `api.job(id)` says what it did.
+ */
+export interface JobSummary {
+  id: string
+  kind: 'refine' | 'test'
+  state: JobState
+  created_at: number
+  started_at: number | null
+  finished_at: number | null
+  queue_position: number | null
+  progress: Progress
+  error: string | null
+  /** How many kept duels its result carries. Counted server-side. */
+  replays: number
 }
 
 export interface Health {
@@ -297,7 +397,7 @@ export const api = {
   health: () => request<Health>('/health'),
   /** All 864 at once. The pool never changes at runtime, so the editor holds it. */
   pool: () => request<Card[]>('/pool'),
-  jobs: () => request<Job[]>('/jobs'),
+  jobs: () => request<JobSummary[]>('/jobs'),
   job: (id: string) => request<Job>(`/jobs/${id}`),
   /** Every value a Constraint may name, with the ceiling the pool sets on it. */
   facets: () => request<Facets>('/constraints/facets'),
@@ -307,6 +407,12 @@ export const api = {
     screening_duels: number
     constraint?: Constraint | null
   }) => request<Job>('/jobs/refine', { method: 'POST', body: JSON.stringify(body) }),
+  /** Gate-evaluate a deck against the Gauntlet. 500 duels is the floor, not a default. */
+  submitTest: (body: {
+    deck?: Deck | null
+    gate_duels: number
+    constraint?: Constraint | null
+  }) => request<Job>('/jobs/test', { method: 'POST', body: JSON.stringify(body) }),
   searchCards: (q: string, limit = 12) =>
     request<Card[]>(`/cards?q=${encodeURIComponent(q)}&limit=${limit}`),
   parseDeck: (text: string, constraint?: Constraint | null) =>

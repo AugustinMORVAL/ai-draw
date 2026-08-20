@@ -21,6 +21,7 @@ from .models import (
     Card,
     Constraint,
     ConstraintReport,
+    Deck,
     DeckReport,
     Facets,
     DuelReplay,
@@ -28,9 +29,12 @@ from .models import (
     Health,
     Job,
     JobKind,
+    JobSummary,
     ParseDeck,
     RefineParams,
     SubmitRefine,
+    SubmitTest,
+    GateParams,
 )
 from .pool import supported_pool
 from .store import JobStore
@@ -55,6 +59,43 @@ def _impossible_detail(
     return ConstraintReport(
         constraint=constraint, feasible=False, satisfied=False, flags=impossible.flags
     )
+
+
+def _deck_to_run(
+    deck: Deck | None, constraint: Constraint | None
+) -> Deck:
+    """The deck a job will run on: the one submitted, or one built to order.
+
+    Every refusal a submission can meet is here, so a refine job and a test job
+    refuse the same things for the same reasons and with the same body -- the report
+    the deck editor was already showing, rather than a wall of JSON:
+
+    - **An illegal deck** is refused at the door because `ygopro-core` aborts the
+      process on a malformed deck rather than rejecting it (#4). The queue never
+      sees one.
+    - **An unsatisfiable Constraint** is refused when there is no deck yet, because
+      there is then nothing to build and so no work to queue. A satisfiable one the
+      submitted deck does not meet is not refused: a refine job's masked swaps pull
+      toward it, and a test job only records what was asked for.
+    """
+    index = card_index()
+    if deck is None:
+        if constraint is None:
+            return constraints.random_deck()
+        try:
+            return constraints.construct(index, constraint)
+        except constraints.Impossible as impossible:
+            raise HTTPException(
+                status_code=422,
+                detail=_impossible_detail(constraint, impossible).model_dump(
+                    mode="json"
+                ),
+            ) from impossible
+
+    report = review(ParsedDeck(main=list(deck.main)), index, constraint)
+    if not report.legal:
+        raise HTTPException(status_code=422, detail=report.model_dump(mode="json"))
+    return deck
 
 
 def create_app(
@@ -164,46 +205,50 @@ def create_app(
 
     @app.post("/api/jobs/refine", response_model=Job, status_code=201)
     async def submit_refine(body: SubmitRefine) -> Job:
-        index = card_index()
-        constraint = body.constraint
-        if constraint is not None:
-            # An unsatisfiable Constraint is refused at the door like an illegal
-            # deck, for the same reason: there is no work to queue. A *satisfiable*
-            # one the deck does not yet meet is fine -- masked swaps drive it there.
-            try:
-                deck = body.deck or constraints.construct(index, constraint)
-            except constraints.Impossible as impossible:
-                raise HTTPException(
-                    status_code=422,
-                    detail=_impossible_detail(constraint, impossible).model_dump(
-                        mode="json"
-                    ),
-                ) from impossible
-        else:
-            deck = body.deck or constraints.random_deck()
-
-        if body.deck is not None:
-            report = review(ParsedDeck(main=list(deck.main)), index, constraint)
-            if not report.legal:
-                # An illegal deck is not a bad result, it is an aborted duel process
-                # (#4). Refuse it at the door, with the reasons the UI already shows.
-                raise HTTPException(
-                    status_code=422, detail=report.model_dump(mode="json")
-                )
+        """Mutate a deck, keeping the swaps that Screen better. Never quotable."""
         params = RefineParams(
-            deck=deck,
+            deck=_deck_to_run(body.deck, body.constraint),
             mutations=body.mutations,
             screening_duels=body.screening_duels,
-            constraint=constraint,
+            constraint=body.constraint,
         )
         return await store.enqueue(JobKind.REFINE, params.model_dump())
 
-    @app.get("/api/jobs", response_model=list[Job])
-    async def list_jobs(limit: int = 50) -> list[Job]:
+    @app.post("/api/jobs/test", response_model=Job, status_code=201)
+    async def submit_test(body: SubmitTest) -> Job:
+        """Gate-evaluate a deck against the Gauntlet.
+
+        The one job whose number may be quoted (ADR-0003), which is why the floor on
+        `gate_duels` is 500 and not the caller's to lower: a Gate-labelled win rate
+        measured over a Screening-sized batch is precisely what two fidelities with
+        two names exist to make impossible.
+        """
+        params = GateParams(
+            deck=_deck_to_run(body.deck, body.constraint),
+            gate_duels=body.gate_duels,
+            constraint=body.constraint,
+        )
+        return await store.enqueue(JobKind.TEST, params.model_dump())
+
+    @app.get("/api/jobs", response_model=list[JobSummary])
+    async def list_jobs(limit: int = 50) -> list[JobSummary]:
+        """The queue. Summaries only -- a job's payload is on the job itself.
+
+        This is what the browser polls while a job runs, so it carries no decks, no
+        results and no duel logs. `GET /api/jobs/{id}` carries all three, and is
+        polled for the one job a user is actually watching.
+        """
         return await store.list(limit=min(max(limit, 1), 200))
 
     @app.get("/api/jobs/{job_id}", response_model=Job)
     async def get_job(job_id: str) -> Job:
+        """One job, whole: its params, its checkpoint, and its result if it has one.
+
+        A running refine job answers with the checkpoint it last wrote, so the swap
+        log on screen is the swap log the worker has actually made rather than a
+        summary of it, and it builds up mutation by mutation instead of appearing
+        all at once when the job ends.
+        """
         job = await store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="no such job")

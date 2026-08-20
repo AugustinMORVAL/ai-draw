@@ -30,8 +30,8 @@ Each slice is done when its manual test passes by hand in a browser. Estimates a
 | 0 ✓ | Shell, seam, fake executor, durable job queue | Submit a fake refine job; watch it queue, run, finish; reload the page mid-job and it is still there | - | 1 |
 | 1 ✓ | Deck input: paste a decklist, card search, legality + Masking preview | Paste a deck with 4 copies of a card and an out-of-pool card; both are flagged with reasons | #4 | 1.5 |
 | 2 ✓ | Interests: the Constraint form that drives a build | Ask for a themed deck under a card-count cap; get a legal deck that respects it. Ask for a Cyberse one and get the reason no deck can be built | #4 | 1 |
-| 3 | Refine job: submit, queue position, live progress, result | Submit a deck, watch swap-by-swap progress, see the final diff and which cards changed | #6, #7 | 2 |
-| 4 | Test job: Gate evaluation vs the Gauntlet | Run a test, get a win rate with its matchup breakdown, labelled Gate fidelity | #3, #8 | 1.5 |
+| 3 ✓ | Refine job: submit, queue position, live progress, result | Submit a deck, watch swap-by-swap progress, see the final diff and which cards changed | #6, #7 | 2 |
+| 4 ✓ | Test job: Gate evaluation vs the Gauntlet | Run a test, get a win rate with its matchup breakdown, labelled Gate fidelity | #3, #8 | 1.5 |
 | 5 | Deck library: save, name, version, compare | Save two decks, diff them, see each one's last Gate result | - | 1.5 |
 | 6 ~ | Duel replay: watch one duel the deck played | Open a duel from a refine result, step through the action log | #3 | 2 |
 | 7 | Real executor: swap `FakeExecutor` for `YgoenvExecutor` | Every slice above still passes its manual test, now against real duels | #3 | 1.5 |
@@ -69,7 +69,120 @@ behind each phase.
 
 ## Status
 
-**Slices 0, 1 and 2 are done. Slice 6 is done against the fake executor.**
+**Slices 0 to 4 are done. Slice 6 is done against the fake executor.**
+
+### Slice 4 -- the test job: Gate evaluation vs the Gauntlet
+
+The manual test passes: a deck goes to the farm as a test, faces all ten Gauntlet
+decks 50 duels each, and comes back at 66.2% +/-4.1 with the ten numbers that
+average to it -- 80% into Sky Striker Ace, 56% into Chimera -- labelled `gate`.
+
+`gate.py` is the whole job and it is deliberately thin: no mutations, no proposals,
+no Masking, because a test has no pick to mask. What it adds over one call to
+`executor.gate()` is the three things a queued job owes a user -- progress while it
+runs, a place to stop, and a result that carries its own provenance.
+
+The slice's real work was deciding what makes a number quotable, and then making the
+code unable to publish one that is not:
+
+- **The headline is summed out of the breakdown, never carried beside it.**
+  `FakeExecutor` could trivially state both and let them drift; then the app would be
+  showing ten rows nobody could check against the number above them. A test asserts
+  `sum(wins) / sum(duels) == win_rate`.
+- **500 duels is a floor, not a default.** `POST /api/jobs/test` refuses
+  `gate_duels` below 500 with a 422. ADR-0003 gives the two fidelities separate names
+  precisely so a Gate-labelled win rate cannot have been measured over a
+  Screening-sized batch, and a knob a user can turn down to 100 would hand that back.
+- **Every rate arrives with the band its duel count earns**, from one formula
+  (`models.wald_margin`), as a computed field so it cannot be forgotten: +/-4.4 points
+  at 500 duels, +/-13.9 at the 50 one matchup gets. That is why the breakdown is
+  drawn as bars against the 50% line with the band behind each one, and why the panel
+  says to read the ordering rather than the digits -- the band is wider than most of
+  the bars.
+- **Screening carries no breakdown at all.** At 100 duels a matchup row is ten
+  duels, a +/-31 point band under a number ADR-0003 already forbids quoting. The seam
+  returns `matchups: []` from `screen()` and says why.
+- **The Gauntlet is shown in its fixed order**, not sorted best-to-worst. It is fixed
+  within a phase so two decks' rows line up (CONTEXT.md); re-sorting per deck would
+  spend that to make one column look tidier.
+
+Three smaller decisions:
+
+- **Each opponent's duels are split 50/50 on the play and on the draw**, and the row
+  carries both. ADR-0004 forces the seat, and in Master Duel Bo1 the seat is often
+  worth more than the decklist -- one averaged number would hide a deck that only
+  wins going first.
+- **A test job stops between matchups and nowhere else.** That is not a shortcut: a
+  candidate deck may only be swapped at a batch boundary (ADR-0004), so "stop now"
+  has to mean "stop after this matchup" or it means racing the core. The seam's
+  `on_matchup` hook is the same boundary the progress line is written on.
+- **One submit panel, two kinds.** The deck, the interests and the legality that
+  decide whether anything may be queued are identical for a refine and a test, so
+  `_deck_to_run` in `main.py` is the one place both refusals live -- an illegal deck
+  and an unsatisfiable Constraint -- and the panel switches only the fidelity and its
+  knobs. A test job keeps the Constraint as the record of what the deck was asked to
+  be, and the caption says so rather than repeating the refine job's "masked into
+  every swap", which for a test would be a lie.
+
+Known gaps, deliberate: **a test job is not checkpointed.** A restart re-runs its
+duels, because there is no half of one win rate worth keeping -- but a cancelled test
+therefore keeps only its last progress line, not the matchups it did finish. And it
+reports **no Baseline comparison**: the Build gate is "beats the Damaged-deck
+Baseline by >=15 points" (#8), which needs a Damaged deck built from a shipped Seed
+deck the API container does not carry. Slice 5's library is where two Gate results
+get compared.
+
+### Slice 3 -- the refine job, watched while it runs
+
+The manual test passes: a pasted deck goes to the farm, the swap log fills in
+mutation by mutation while the job runs, and the finished job says which cards
+changed.
+
+One thing carries the slice: **the checkpoint**. After every mutation the worker
+writes what it has -- the best deck so far, its win rate, every swap tried, and the
+diff against the deck that was submitted -- in the same statement that writes
+progress, so the two can never disagree. Two readers want exactly that record, and
+before this slice each would have got its own half-answer:
+
+- **The browser**, which now shows the swap log building up instead of a bar that
+  turns into 30 mutations when the job ends.
+- **The worker after a restart**, which resumes at the mutation it reached. Slice 0
+  left this as a known gap: the job was never lost, but the swaps it had already
+  paid for were. Resuming is safe because a mutation is a pure function of the deck
+  and the step number -- the job re-derives the swap it was about to make and carries
+  on, rather than re-running the ones a user already watched.
+
+Four more things this slice decided:
+
+- **A diff is not a swap log.** `RefineResult` carries the deck that was submitted
+  beside the final one, and the diff between them: 30 mutations, 4 accepted, and 4
+  cards changed is the common shape, but a card cut at step 3 and picked back up at
+  step 17 is two swaps and no change. The log says what was *tried*; the diff says
+  what a user takes away. Both are on screen and they are labelled as the different
+  things they are.
+- **A result supersedes the checkpoint that built it**; a cancelled or failed job
+  keeps its checkpoint, because that is the only record of the work that did happen.
+- **`GET /api/jobs` is summaries now.** It is polled every 700 ms and a refine result
+  holds six full duel logs, so the list carries where each job stands and nothing it
+  carries; `GET /api/jobs/{id}` carries the params, the checkpoint and the result,
+  and is polled only for the one job on screen -- and stops the moment that job is
+  finished. The replay picker still knows which jobs are watchable because the kept
+  duels are counted in SQL (`json_array_length`), so no log crosses the wire to draw
+  a list of ids.
+- **The job database migrates in place.** `make down` keeps the volume on purpose,
+  so the file a user has is older than the code reading it, and
+  `CREATE TABLE IF NOT EXISTS` will not add a column to a table that exists. A
+  checkpoint written by an older build that no longer validates is not a reason to
+  fail a job: the job starts over, which is exactly where this app was before
+  checkpoints existed.
+
+Progress messages name cards now (`Mutation 9/40: rejected Shaddoll Dragon -> Prayers
+of the Voiceless Voice`) rather than passcodes. A line a person reads should be
+readable by that person.
+
+Still deliberately polled, not streamed. At beta scale, with the payload split off
+the list, 700 ms costs one small row per job and the checkpoint of the single job
+being watched.
 
 ### Slice 2 -- Interests, the Constraint that drives a build
 
@@ -224,7 +337,7 @@ exact pool, our rules are wrong.
 - `ui/` — Tailwind v4 shell: the `live: false` header badge, the job list with honest queue
   positions, and a job view with progress and the swap log.
 
-91 tests in `api/tests/`, including every slice's manual test.
+119 tests in `api/tests/`, including every slice's manual test.
 
 Running it:
 
@@ -232,7 +345,7 @@ Running it:
 make up          # build and start both containers -> http://localhost:8080
 make down        # stop, keeping every queued and finished job
 make clean       # stop and delete the job database volume
-make test        # the 91 tests, inside the API image
+make test        # the 119 tests, inside the API image
 ```
 
 `make up` publishes the UI on 8080 and the API on 8000; both are overridable
@@ -250,9 +363,10 @@ cd ui && npm install && npm run dev      # http://localhost:5173, proxies /api t
 
 Known gaps, deliberately left for later slices:
 
-- **Restart recovery re-runs a job from the start.** The job is never lost, but the swaps it had
-  already made are. Checkpointing per swap belongs with slice 3's progress work.
-- **Progress is polled at 700 ms**, not streamed. Fine at beta scale; slice 3 can revisit.
+- ~~**Restart recovery re-runs a job from the start.**~~ Closed by slice 3: the worker
+  checkpoints after every mutation and resumes from it.
+- **Progress is polled at 700 ms**, not streamed. Still true after slice 3, which
+  split the payload off the polled list instead. Fine at beta scale.
 - **Side decks are parsed and then dropped.** Phase 1 has no use for one.
 - **No auth.** Slice 8.
 

@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+from httpx import ASGITransport, AsyncClient
+
+from ai_draw_api.executor import FakeExecutor
+from ai_draw_api.main import create_app
+from ai_draw_api.store import JobStore
 
 SEED_DECK = Path(__file__).parent / "fixtures" / "Shaddoll.ydk"
 
@@ -244,3 +250,107 @@ async def test_a_constrained_job_builds_its_own_deck_and_keeps_it_conformant(cli
     ).json()
     assert checked["legal"] is True, checked["flags"]
     assert checked["constraint"]["satisfied"] is True, checked["constraint"]["flags"]
+
+
+@asynccontextmanager
+async def _running_app(db_path, *, duel_seconds: float):
+    """The app over a given database, at a chosen duel speed.
+
+    Slice 3 is about what a user sees *while* a job runs, so its tests need a job
+    that takes long enough to be watched, and a second process over the same file.
+    """
+    app = create_app(
+        store=JobStore(db_path), executor=FakeExecutor(duel_seconds=duel_seconds)
+    )
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
+
+
+async def test_the_slice_3_manual_test(db_path):
+    """Submit a deck, watch it swap by swap, then read what actually changed."""
+    async with _running_app(db_path, duel_seconds=0.002) as client:
+        report = (
+            await client.post(
+                "/api/decks/parse", json={"text": SEED_DECK.read_text()}
+            )
+        ).json()
+        assert report["legal"] is True
+
+        submitted = (
+            await client.post(
+                "/api/jobs/refine",
+                json={
+                    "deck": report["deck"],
+                    "mutations": 40,
+                    "screening_duels": 10,
+                },
+            )
+        ).json()
+
+        # Watched swap by swap: the log grows as the job runs. It is not one
+        # spinner that turns into forty mutations at the end.
+        widths = []
+        while True:
+            job = (await client.get(f"/api/jobs/{submitted['id']}")).json()
+            if job["checkpoint"]:
+                widths.append(len(job["checkpoint"]["swaps"]))
+            if job["state"] in {"succeeded", "failed", "cancelled"}:
+                break
+            await asyncio.sleep(0.02)
+
+        assert job["state"] == "succeeded", job["error"]
+        assert len(set(widths)) > 1, "the swap log was only readable once it ended"
+        assert widths == sorted(widths), "a swap log never un-happens"
+
+        result = job["result"]
+        assert job["checkpoint"] is None, "the result supersedes the checkpoint"
+        assert result["starting_deck"]["main"] == report["deck"]["main"]
+
+        # And which cards changed, as cards: the net of the log, not the log.
+        diff = result["diff"]
+        added = sum(change["count"] for change in diff["added"])
+        removed = sum(change["count"] for change in diff["removed"])
+        assert added == removed, "a swap trades one card for one card"
+        assert added + diff["unchanged"] == len(result["deck"]["main"])
+        for change in diff["added"]:
+            card = (await client.get(f"/api/cards/{change['card']}")).json()
+            assert card["in_pool"] is True, card["name"]
+
+
+async def test_a_restart_resumes_a_job_instead_of_starting_it_over(db_path):
+    """The known gap slice 0 left: a job survived a restart but redid its work."""
+    async with _running_app(db_path, duel_seconds=0.002) as client:
+        submitted = (
+            await client.post(
+                "/api/jobs/refine", json={"mutations": 60, "screening_duels": 10}
+            )
+        ).json()
+        checkpoint = None
+        while checkpoint is None or checkpoint["step"] < 5:
+            job = (await client.get(f"/api/jobs/{submitted['id']}")).json()
+            checkpoint = job["checkpoint"]
+            await asyncio.sleep(0.01)
+
+    # The process dies here, mid-job. A new one opens the same database.
+    async with _running_app(db_path, duel_seconds=0.0) as client:
+        done = await _await_state(client, submitted["id"], {"succeeded", "failed"})
+        assert done["state"] == "succeeded", done["error"]
+        swaps = done["result"]["swaps"]
+        assert [s["step"] for s in swaps] == list(range(1, 61)), "no mutation is lost"
+        assert swaps[: len(checkpoint["swaps"])] == checkpoint["swaps"], (
+            "the mutations run before the restart are the ones it came back with"
+        )
+
+
+async def test_the_queue_list_is_summaries_not_payloads(client):
+    """What the browser polls carries no decks, no results and no duel logs."""
+    submitted = (await client.post("/api/jobs/refine", json={"mutations": 2})).json()
+    done = await _await_state(client, submitted["id"], {"succeeded", "failed"})
+    assert done["result"]["replays"], "the job kept duels"
+
+    (listed,) = (await client.get("/api/jobs")).json()
+    assert listed["id"] == submitted["id"]
+    assert listed["replays"] == len(done["result"]["replays"])
+    assert "result" not in listed and "params" not in listed

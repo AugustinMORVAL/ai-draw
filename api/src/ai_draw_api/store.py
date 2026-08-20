@@ -14,7 +14,15 @@ from pathlib import Path
 
 import aiosqlite
 
-from .models import TERMINAL_STATES, Job, JobKind, JobState, Progress
+from .models import (
+    TERMINAL_STATES,
+    Job,
+    JobKind,
+    JobState,
+    JobSummary,
+    Progress,
+    RefineCheckpoint,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -24,6 +32,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     state            TEXT    NOT NULL,
     params           TEXT    NOT NULL,
     progress         TEXT    NOT NULL,
+    checkpoint       TEXT,
     result           TEXT,
     error            TEXT,
     cancel_requested INTEGER NOT NULL DEFAULT 0,
@@ -56,6 +65,20 @@ class JobStore:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(SCHEMA)
         await self._db.commit()
+        await self._migrate()
+
+    async def _migrate(self) -> None:
+        """Bring a database written by an older build up to the current schema.
+
+        `make down` keeps the job volume on purpose, so the file a user has is older
+        than the code reading it. `CREATE TABLE IF NOT EXISTS` will not add a column
+        to a table that already exists, which is why this exists at all.
+        """
+        async with self.db.execute("PRAGMA table_info(jobs)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if "checkpoint" not in columns:
+            await self.db.execute("ALTER TABLE jobs ADD COLUMN checkpoint TEXT")
+            await self.db.commit()
 
     async def close(self) -> None:
         if self._db is not None:
@@ -114,11 +137,28 @@ class JobStore:
         await self.db.commit()
         return await self.get(row["id"])
 
-    async def set_progress(self, job_id: str, progress: Progress) -> None:
-        await self.db.execute(
-            "UPDATE jobs SET progress = ? WHERE id = ?",
-            (progress.model_dump_json(), job_id),
-        )
+    async def set_progress(
+        self,
+        job_id: str,
+        progress: Progress,
+        checkpoint: RefineCheckpoint | None = None,
+    ) -> None:
+        """One statement, so progress and checkpoint can never disagree.
+
+        A report without a checkpoint leaves the stored one alone rather than
+        clearing it: "screening the starting deck" is news about the job, not a
+        statement that the work it had already done is gone.
+        """
+        if checkpoint is None:
+            await self.db.execute(
+                "UPDATE jobs SET progress = ? WHERE id = ?",
+                (progress.model_dump_json(), job_id),
+            )
+        else:
+            await self.db.execute(
+                "UPDATE jobs SET progress = ?, checkpoint = ? WHERE id = ?",
+                (progress.model_dump_json(), checkpoint.model_dump_json(), job_id),
+            )
         await self.db.commit()
 
     async def finish(
@@ -129,14 +169,19 @@ class JobStore:
         result: dict | None = None,
         error: str | None = None,
     ) -> None:
+        # A result supersedes the checkpoint that built it, so it is dropped. A job
+        # that stopped without one -- cancelled, failed -- keeps its checkpoint,
+        # because that is the only record of the work it did do.
         await self.db.execute(
-            "UPDATE jobs SET state = ?, result = ?, error = ?, finished_at = ?"
+            "UPDATE jobs SET state = ?, result = ?, error = ?, finished_at = ?,"
+            " checkpoint = CASE WHEN ? THEN NULL ELSE checkpoint END"
             " WHERE id = ?",
             (
                 state.value,
                 json.dumps(result) if result is not None else None,
                 error,
                 time.time(),
+                1 if result is not None else 0,
                 job_id,
             ),
         )
@@ -170,12 +215,37 @@ class JobStore:
             return None
         return await self._to_job(row)
 
-    async def list(self, limit: int = 50) -> list[Job]:
+    async def list(self, limit: int = 50) -> list[JobSummary]:
+        """The queue, without anything a job carries.
+
+        `result` and `checkpoint` are the two big columns and neither is selected:
+        this is polled every 700 ms while a job runs, and a refine result holds six
+        full duel logs. `json_array_length` counts the kept duels in SQL so the
+        replay picker still knows which jobs are watchable.
+        """
         async with self.db.execute(
-            "SELECT * FROM jobs ORDER BY seq DESC LIMIT ?", (limit,)
+            "SELECT seq, id, kind, state, progress, error,"
+            " created_at, started_at, finished_at,"
+            " COALESCE(json_array_length(result, '$.replays'), 0) AS replays"
+            " FROM jobs ORDER BY seq DESC LIMIT ?",
+            (limit,),
         ) as cur:
             rows = await cur.fetchall()
-        return [await self._to_job(row) for row in rows]
+        return [
+            JobSummary(
+                id=row["id"],
+                kind=JobKind(row["kind"]),
+                state=JobState(row["state"]),
+                created_at=row["created_at"],
+                started_at=row["started_at"],
+                finished_at=row["finished_at"],
+                queue_position=await self._queue_position(row),
+                progress=Progress.model_validate_json(row["progress"]),
+                error=row["error"],
+                replays=row["replays"],
+            )
+            for row in rows
+        ]
 
     async def _queue_position(self, row: aiosqlite.Row) -> int | None:
         """1 = next to run. Running jobs are 0. Finished jobs have no position."""
@@ -203,5 +273,6 @@ class JobStore:
             progress=Progress.model_validate_json(row["progress"]),
             params=json.loads(row["params"]),
             result=json.loads(row["result"]) if row["result"] else None,
+            checkpoint=json.loads(row["checkpoint"]) if row["checkpoint"] else None,
             error=row["error"],
         )

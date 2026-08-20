@@ -28,12 +28,17 @@ function useDeckText() {
 }
 
 export default function App() {
-  const { jobs, health, offline, error, submitRefine, cancel } = useJobs()
+  const { jobs, health, offline, error, submitRefine, submitTest, cancel } = useJobs()
   const [route, go] = useRoute()
   const [busy, setBusy] = useState(false)
   const [deckText, setDeckText] = useDeckText()
   const interests = useConstraint()
   const deck = useDeckReport(deckText, interests.asked)
+
+  /** Queueing anything is the one action that changes what you should look at. */
+  const watch = (job: { id: string } | null) => {
+    if (job) go({ view: 'farm', jobId: job.id, replay: null })
+  }
 
   const onSubmit = async (body: {
     deck?: Deck | null
@@ -44,8 +49,18 @@ export default function App() {
     setBusy(true)
     const job = await submitRefine(body)
     setBusy(false)
-    // Submitting is the one action that changes what you should be looking at.
-    if (job) go({ view: 'farm', jobId: job.id, replay: null })
+    watch(job)
+  }
+
+  const onTest = async (body: {
+    deck?: Deck | null
+    gate_duels: number
+    constraint?: Constraint | null
+  }) => {
+    setBusy(true)
+    const job = await submitTest(body)
+    setBusy(false)
+    watch(job)
   }
 
   return (
@@ -65,6 +80,7 @@ export default function App() {
           health={health}
           interests={interests}
           onSubmit={onSubmit}
+          onTest={onTest}
           busy={busy}
           submitError={error}
         />

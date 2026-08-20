@@ -85,6 +85,7 @@ export function DeckEditor({
   health,
   interests,
   onSubmit,
+  onTest,
   busy,
   submitError,
 }: {
@@ -101,6 +102,11 @@ export function DeckEditor({
     screening_duels: number
     constraint?: Constraint | null
   }) => Promise<void>
+  onTest: (body: {
+    deck?: Deck | null
+    gate_duels: number
+    constraint?: Constraint | null
+  }) => Promise<void>
   busy: boolean
   submitError: string | null
 }) {
@@ -109,6 +115,11 @@ export function DeckEditor({
   const [showText, setShowText] = useState(false)
   const [mutations, setMutations] = useState(25)
   const [duels, setDuels] = useState(100)
+  // Which job to queue. Two kinds, one panel: the deck, the interests and the
+  // legality that decide whether anything may be queued at all are the same for
+  // both, and only the fidelity and the knobs differ.
+  const [kind, setKind] = useState<'refine' | 'test'>('refine')
+  const [gateDuels, setGateDuels] = useState(500)
 
   const held = useMemo(
     () => (code: number) => copiesOf(report, code),
@@ -245,6 +256,14 @@ export function DeckEditor({
             className="flex flex-col gap-3 border border-edge bg-panel p-3"
             onSubmit={(e) => {
               e.preventDefault()
+              if (kind === 'test') {
+                void onTest({
+                  deck: report?.deck ?? null,
+                  gate_duels: gateDuels,
+                  constraint: interests.asked,
+                })
+                return
+              }
               void onSubmit({
                 deck: report?.deck ?? null,
                 mutations,
@@ -256,51 +275,115 @@ export function DeckEditor({
             <h2 className="font-display text-xs font-semibold tracking-[0.14em] text-gold">
               SEND TO THE DUEL FARM
             </h2>
+
+            <div className="grid grid-cols-2 border border-edge">
+              {(
+                [
+                  ['refine', 'Refine'],
+                  ['test', 'Test'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setKind(value)}
+                  className={cn(
+                    'py-1.5 font-display text-[10px] font-semibold tracking-[0.14em] uppercase transition-colors',
+                    kind === value
+                      ? 'bg-gold text-void'
+                      : 'text-faint hover:text-gold',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
             <p className="text-[11.5px] leading-relaxed text-muted">
-              {hasDeck
-                ? 'The Builder mutates this deck swap by swap, keeping any swap with a positive Delta score. Every swap comes from inside the Masked action space, so the deck stays legal at every step.'
-                : interests.stated
-                  ? 'With no deck built, this builds one under your interests first, then refines it.'
-                  : 'With no deck built, this refines a random legal deck drawn from the 408 main-deck cards the Pilot can play.'}
+              {kind === 'test'
+                ? hasDeck
+                  ? 'Gate evaluation: paired duels split evenly across the ten Gauntlet decks, reported with the matchup breakdown. Nothing is mutated — this measures the deck as it stands.'
+                  : interests.stated
+                    ? 'With no deck built, this builds one under your interests and Gate-evaluates that.'
+                    : 'With no deck built, this Gate-evaluates a random legal deck drawn from the 408 main-deck cards the Pilot can play.'
+                : hasDeck
+                  ? 'The Builder mutates this deck swap by swap, keeping any swap with a positive Delta score. Every swap comes from inside the Masked action space, so the deck stays legal at every step.'
+                  : interests.stated
+                    ? 'With no deck built, this builds one under your interests first, then refines it.'
+                    : 'With no deck built, this refines a random legal deck drawn from the 408 main-deck cards the Pilot can play.'}
             </p>
             {interests.stated && (
               <p className="text-[10.5px] leading-relaxed text-faint">
-                Your interests mask every swap, so the job cannot spend a mutation on
-                a card you ruled out.
-                {hasDeck && report?.constraint?.satisfied === false
-                  ? ' This deck does not meet them yet: each masked swap pays that down, but only swaps with a positive Delta are kept, so the job pulls toward your interests without promising to arrive. Build the deck to be sure of it.'
-                  : ''}
+                {kind === 'test' ? (
+                  'A test mutates nothing, so there is no pick for your interests to mask. They are kept on the job as the record of what this deck was asked to be.'
+                ) : (
+                  <>
+                    Your interests mask every swap, so the job cannot spend a mutation
+                    on a card you ruled out.
+                    {hasDeck && report?.constraint?.satisfied === false
+                      ? ' This deck does not meet them yet: each masked swap pays that down, but only swaps with a positive Delta are kept, so the job pulls toward your interests without promising to arrive. Build the deck to be sure of it.'
+                      : ''}
+                  </>
+                )}
               </p>
             )}
 
-            <div className="grid grid-cols-2 gap-2">
+            {kind === 'test' ? (
               <label className="space-y-1">
-                <span className="label block text-faint">Mutations</span>
+                <span className="label block text-faint">Gate duels</span>
                 <input
                   className={FIELD}
                   type="number"
-                  min={1}
-                  max={200}
-                  value={mutations}
-                  onChange={(e) => setMutations(Number(e.target.value))}
+                  min={500}
+                  max={5000}
+                  step={100}
+                  value={gateDuels}
+                  onChange={(e) => setGateDuels(Number(e.target.value))}
                 />
+                <span className="block text-[10.5px] leading-relaxed text-faint">
+                  {Math.floor(gateDuels / 10)} duels against each of the ten Gauntlet
+                  decks. 500 is a floor, not a default: fewer is a Screening number
+                  wearing a Gate label, and the API refuses it (ADR-0003).
+                </span>
               </label>
-              <label className="space-y-1">
-                <span className="label block text-faint">Screening duels</span>
-                <input
-                  className={FIELD}
-                  type="number"
-                  min={10}
-                  max={1000}
-                  step={10}
-                  value={duels}
-                  onChange={(e) => setDuels(Number(e.target.value))}
-                />
-              </label>
-            </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <label className="space-y-1">
+                  <span className="label block text-faint">Mutations</span>
+                  <input
+                    className={FIELD}
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={mutations}
+                    onChange={(e) => setMutations(Number(e.target.value))}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="label block text-faint">Screening duels</span>
+                  <input
+                    className={FIELD}
+                    type="number"
+                    min={10}
+                    max={1000}
+                    step={10}
+                    value={duels}
+                    onChange={(e) => setDuels(Number(e.target.value))}
+                  />
+                </label>
+              </div>
+            )}
 
             <Button type="submit" disabled={busy || blocked} className="w-full">
-              {busy ? 'Queueing' : hasDeck ? 'Queue refine job' : 'Queue on a random deck'}
+              {busy
+                ? 'Queueing'
+                : kind === 'test'
+                  ? hasDeck
+                    ? 'Queue Gate evaluation'
+                    : 'Gate-evaluate a random deck'
+                  : hasDeck
+                    ? 'Queue refine job'
+                    : 'Queue on a random deck'}
             </Button>
 
             {submitError && (

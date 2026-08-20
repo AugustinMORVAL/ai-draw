@@ -6,8 +6,19 @@ import asyncio
 import contextlib
 import logging
 
+from pydantic import ValidationError
+
 from .executor import DuelExecutor
-from .models import Job, JobKind, JobState, Progress, RefineParams
+from .gate import run_test
+from .models import (
+    Job,
+    JobKind,
+    JobState,
+    Progress,
+    RefineCheckpoint,
+    RefineParams,
+    GateParams,
+)
 from .refine import Cancelled, run_refine
 from .store import JobStore
 
@@ -48,8 +59,10 @@ class Worker:
             await self._run(job)
 
     async def _run(self, job: Job) -> None:
-        async def report(progress: Progress) -> None:
-            await self.store.set_progress(job.id, progress)
+        async def report(
+            progress: Progress, checkpoint: RefineCheckpoint | None = None
+        ) -> None:
+            await self.store.set_progress(job.id, progress, checkpoint)
 
         async def should_cancel() -> bool:
             return await self.store.cancel_requested(job.id)
@@ -61,9 +74,19 @@ class Worker:
                     self.executor,
                     report,
                     should_cancel,
+                    _resume_from(job),
+                )
+            elif job.kind is JobKind.TEST:
+                # No checkpoint: a test job's work is one evaluation, and there is no
+                # half of it worth keeping. A restart re-runs its duels and says so.
+                result = await run_test(
+                    GateParams.model_validate(job.params),
+                    self.executor,
+                    report,
+                    should_cancel,
                 )
             else:
-                raise NotImplementedError(f"{job.kind.value} jobs land in a later slice")
+                raise NotImplementedError(f"{job.kind.value} jobs have no runner")
         except Cancelled:
             await self.store.finish(job.id, JobState.CANCELLED)
         except asyncio.CancelledError:
@@ -76,3 +99,19 @@ class Worker:
             await self.store.finish(
                 job.id, JobState.SUCCEEDED, result=result.model_dump()
             )
+
+
+def _resume_from(job: Job) -> RefineCheckpoint | None:
+    """The checkpoint a re-queued job left behind, if it is still readable.
+
+    A checkpoint written by an older build is not a reason to fail a job: the work
+    it describes is simply lost and the job starts over, which is exactly where this
+    app was before checkpoints existed.
+    """
+    if job.checkpoint is None:
+        return None
+    try:
+        return RefineCheckpoint.model_validate(job.checkpoint)
+    except ValidationError:
+        log.warning("job %s has an unreadable checkpoint; starting it over", job.id)
+        return None

@@ -15,16 +15,18 @@ from ai_draw_api.models import (
     Constraint,
     ConstraintClause,
     ConstraintFacet,
+    Deck,
     Progress,
+    RefineCheckpoint,
     RefineParams,
 )
 from ai_draw_api.pool import supported_pool
-from ai_draw_api.refine import Cancelled, run_refine
+from ai_draw_api.refine import Cancelled, deck_diff, run_refine
 
 pytestmark = pytest.mark.asyncio
 
 
-async def _noop(_: Progress) -> None:
+async def _noop(_: Progress, checkpoint: RefineCheckpoint | None = None) -> None:
     return None
 
 
@@ -65,7 +67,7 @@ async def test_only_positive_deltas_are_kept():
 async def test_cancel_stops_the_loop():
     seen: list[Progress] = []
 
-    async def report(p: Progress) -> None:
+    async def report(p: Progress, checkpoint: RefineCheckpoint | None = None) -> None:
         seen.append(p)
 
     async def cancel_after_three() -> bool:
@@ -150,4 +152,89 @@ async def test_a_deck_that_does_not_meet_the_constraint_is_pulled_toward_it():
     ]
     assert added and all(race == "Dragon" for race in added), (
         "while the floor is unmet, the mask leaves nothing else to add"
+    )
+
+
+class CountingExecutor(FakeExecutor):
+    """A fake that says how many times it was asked to screen a deck.
+
+    Resuming is only worth having if it does not pay for the duels the job already
+    ran, and the count is the only way to see that from outside.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(duel_seconds=0.0)
+        self.screens = 0
+
+    async def screen(self, deck, duels):
+        self.screens += 1
+        return await super().screen(deck, duels)
+
+
+async def test_the_diff_is_the_net_change_not_the_swap_log():
+    """A card cut at step 3 and picked back up at step 17 is two swaps, no change."""
+    diff = deck_diff(Deck(main=[1, 1, 2, 3]), Deck(main=[1, 2, 3, 4]))
+    assert [(c.card, c.count) for c in diff.removed] == [(1, 1)]
+    assert [(c.card, c.count) for c in diff.added] == [(4, 1)]
+    assert diff.unchanged == 3
+
+
+async def test_the_result_says_which_cards_changed():
+    params = RefineParams(deck=random_deck(seed=13), mutations=20, screening_duels=10)
+    result = await run_refine(
+        params, FakeExecutor(duel_seconds=0.0), _noop, never_cancel
+    )
+
+    assert result.starting_deck.main == params.deck.main, "changed from what?"
+    assert result.diff == deck_diff(params.deck, result.deck)
+    added = sum(c.count for c in result.diff.added)
+    removed = sum(c.count for c in result.diff.removed)
+    assert added == removed, "a swap trades one card for one card"
+    assert added + result.diff.unchanged == len(result.deck.main)
+    assert added <= result.accepted, "an accepted swap need not survive to the end"
+
+
+async def test_a_checkpoint_is_written_after_every_mutation():
+    """The swap log is readable while the job runs, not only when it ends."""
+    kept: list[tuple[int, RefineCheckpoint | None]] = []
+
+    async def record(p: Progress, checkpoint: RefineCheckpoint | None = None) -> None:
+        kept.append((p.step, checkpoint))
+
+    params = RefineParams(deck=random_deck(seed=12), mutations=8, screening_duels=10)
+    result = await run_refine(
+        params, FakeExecutor(duel_seconds=0.0), record, never_cancel
+    )
+
+    checkpointed = [step for step, checkpoint in kept if checkpoint is not None]
+    assert checkpointed == [0, 1, 2, 3, 4, 5, 6, 7, 8, 8]
+    growth = [len(c.swaps) for _, c in kept if c is not None]
+    assert growth == [0, 1, 2, 3, 4, 5, 6, 7, 8, 8], "the log builds up, swap by swap"
+    last = kept[-1][1]
+    assert last is not None
+    assert last.deck == result.deck and last.swaps == result.swaps
+
+
+async def test_an_interrupted_job_resumes_where_it_stopped():
+    """A restart costs the mutations the job had not run, not the ones it had."""
+    kept: list[RefineCheckpoint] = []
+
+    async def record(p: Progress, checkpoint: RefineCheckpoint | None = None) -> None:
+        if checkpoint is not None:
+            kept.append(checkpoint)
+
+    params = RefineParams(deck=random_deck(seed=11), mutations=12, screening_duels=10)
+    uninterrupted = CountingExecutor()
+    whole = await run_refine(params, uninterrupted, record, never_cancel)
+
+    # The process dies after mutation 5. A fresh worker picks the checkpoint up.
+    halfway = next(c for c in kept if c.step == 5)
+    resumed_on = CountingExecutor()
+    resumed = await run_refine(params, resumed_on, _noop, never_cancel, halfway)
+
+    assert resumed.deck == whole.deck, "the same job, not a similar one"
+    assert resumed.swaps == whole.swaps
+    assert resumed.diff == whole.diff
+    assert resumed_on.screens == uninterrupted.screens - 6, (
+        "the starting screen and the five mutations it had already run"
     )

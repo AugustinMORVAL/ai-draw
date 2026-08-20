@@ -6,7 +6,13 @@ import { DuelField } from '@/components/duel/DuelField'
 import { LifeBars } from '@/components/duel/LifeBars'
 import { ReplayControls } from '@/components/duel/ReplayControls'
 import { boardAt } from '@/components/duel/board'
-import { api, type Card, type DuelReplay, type DuelReplaySummary, type Job } from '@/lib/api'
+import {
+  api,
+  type Card,
+  type DuelReplay,
+  type DuelReplaySummary,
+  type JobSummary,
+} from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { usePool } from '@/lib/usePool'
 
@@ -94,15 +100,15 @@ export function ReplayTheatre({
   replayIndex,
   onPick,
 }: {
-  jobs: Job[]
+  jobs: JobSummary[]
   jobId: string | null
   replayIndex: number | null
   onPick: (jobId: string, replay: number | null) => void
 }) {
   const { byCode } = usePool()
-  const watchable = jobs.filter(
-    (job) => job.state === 'succeeded' && (job.result?.replays?.length ?? 0) > 0,
-  )
+  // Counted by the server on the queue list, so picking a job to watch costs no
+  // duel logs: the log of the duel actually opened is the only one fetched.
+  const watchable = jobs.filter((job) => job.replays > 0)
   const list = useReplayList(jobId)
   const { replay, error } = useReplay(jobId, replayIndex)
 
