@@ -16,13 +16,18 @@ from .decklist import ParsedDeck
 from .decklist import parse as parse_decklist
 from .executor import DuelExecutor, FakeExecutor
 from .legality import review
+from .library import DeckLibrary, compare
 from .models import (
     BuildDeck,
     Card,
+    CompareDecks,
     Constraint,
     ConstraintReport,
     Deck,
+    DeckComparison,
     DeckReport,
+    DeckSave,
+    DeckSaved,
     Facets,
     DuelReplay,
     DuelReplaySummary,
@@ -30,6 +35,7 @@ from .models import (
     Job,
     JobKind,
     JobSummary,
+    LibraryDeck,
     ParseDeck,
     RefineParams,
     SubmitRefine,
@@ -104,10 +110,14 @@ def create_app(
     store = store or JobStore(os.environ.get("AI_DRAW_DB", DEFAULT_DB))
     executor = executor or FakeExecutor()
     worker = Worker(store, executor)
+    # The library rides on the job store's connection: it joins against `jobs` to
+    # find the Gate result that measured a saved deck (see `library.py`).
+    library = DeckLibrary(store)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await store.open()
+        await library.open()
         await worker.start()
         try:
             yield
@@ -125,6 +135,7 @@ def create_app(
     app.state.store = store
     app.state.executor = executor
     app.state.worker = worker
+    app.state.library = library
 
     @app.get("/api/health", response_model=Health)
     async def health() -> Health:
@@ -278,6 +289,51 @@ def create_app(
         if match is None:
             raise HTTPException(status_code=404, detail=f"no replay {index} on this job")
         return DuelReplay.model_validate(match)
+
+    @app.get("/api/library", response_model=list[LibraryDeck])
+    async def get_library() -> list[LibraryDeck]:
+        """Every saved deck, every version, with the Gate result each one carries.
+
+        One response, like `/api/pool` and for the same kind of reason: the
+        comparison picker needs every version to be pickable, and a list that left
+        the Gate results out would send a user back for them one deck at a time.
+        """
+        return await library.list()
+
+    @app.post("/api/library/decks", response_model=DeckSaved, status_code=201)
+    async def save_deck(body: DeckSave) -> DeckSaved:
+        """Put a decklist on the shelf under a name, as a new version if it is one.
+
+        Unlike a job submission this refuses nothing. Legality gates the queue
+        because an illegal deck kills the worker (#4); a shelf has no worker, and a
+        32-card deck someone is halfway through building is exactly what a library
+        is for. The answer says whether a version was actually written: saving an
+        untouched deck twice leaves one version behind.
+        """
+        return await library.save(body.name, body.main, body.extra, body.note)
+
+    @app.delete("/api/library/decks/{deck_id}", status_code=204)
+    async def delete_deck(deck_id: str) -> None:
+        """Forget a deck and all its versions. Its jobs, and their results, stay."""
+        if not await library.delete(deck_id):
+            raise HTTPException(status_code=404, detail="no such deck in the library")
+
+    @app.post("/api/library/compare", response_model=DeckComparison)
+    async def compare_decks(body: CompareDecks) -> DeckComparison:
+        """Diff two saved versions, and compare the Gate results they carry.
+
+        Both halves are answered here rather than in the browser for the same
+        reason legality is: the diff is the refine job's diff function, and the
+        verdict on two win rates is a statement about ADR-0003's bands. A second
+        implementation in the UI would be a second answer to both.
+        """
+        try:
+            return await compare(library, body.left, body.right)
+        except KeyError as missing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"the library has no version {missing.args[0]}",
+            ) from missing
 
     @app.post("/api/jobs/{job_id}/cancel", response_model=Job)
     async def cancel_job(job_id: str) -> Job:

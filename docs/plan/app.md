@@ -32,7 +32,7 @@ Each slice is done when its manual test passes by hand in a browser. Estimates a
 | 2 ✓ | Interests: the Constraint form that drives a build | Ask for a themed deck under a card-count cap; get a legal deck that respects it. Ask for a Cyberse one and get the reason no deck can be built | #4 | 1 |
 | 3 ✓ | Refine job: submit, queue position, live progress, result | Submit a deck, watch swap-by-swap progress, see the final diff and which cards changed | #6, #7 | 2 |
 | 4 ✓ | Test job: Gate evaluation vs the Gauntlet | Run a test, get a win rate with its matchup breakdown, labelled Gate fidelity | #3, #8 | 1.5 |
-| 5 | Deck library: save, name, version, compare | Save two decks, diff them, see each one's last Gate result | - | 1.5 |
+| 5 ✓ | Deck library: save, name, version, compare | Save two decks, diff them, see each one's last Gate result | - | 1.5 |
 | 6 ~ | Duel replay: watch one duel the deck played | Open a duel from a refine result, step through the action log | #3 | 2 |
 | 7 | Real executor: swap `FakeExecutor` for `YgoenvExecutor` | Every slice above still passes its manual test, now against real duels | #3 | 1.5 |
 | 8 | Beta hardening: shared-key access, rate limit, queue fairness | Two users submit at once; both see honest queue positions | - | 1 |
@@ -63,13 +63,97 @@ behind each phase.
   a human recognises; a Constraint can only say "at least 20 Fiends". Archetype membership is in
   the card text (`desc`) and in nothing structured the index carries, so naming one would mean
   matching strings in card names. Worth revisiting once users say which they meant.
+- **One shelf, no owners.** The deck library is a single shared list because there
+  is no auth until slice 8. At five to twenty known users that is a feature -- the
+  beta can look at each other's decks -- and it is also how someone deletes a deck
+  they did not save. Whether the shelf becomes per-user or stays shared with
+  attribution is the same decision as accounts.
 - **Name matching is exact, not fuzzy.** Slice 1 folds accents, quote styles and spacing, but a
   misspelling still resolves to nothing. Good enough while the paste box is mostly `.ydk`; a
   typo-tolerant matcher is worth revisiting if users type more than they paste.
 
 ## Status
 
-**Slices 0 to 4 are done. Slice 6 is done against the fake executor.**
+**Slices 0 to 5 are done. Slice 6 is done against the fake executor.**
+
+### Slice 5 -- the deck library: save, name, version, compare
+
+The manual test passes: two decks are saved, the library diffs them card for card
+(4 out, 4 in, 36 unchanged), and each one carries the last Gate result that measured
+it -- 52.6% +/-4.4 against 58.6% +/-4.3, six points apart and reported as *not* a
+difference, because two 500-duel measurements earn a +/-6.1 band between them.
+
+Until this slice a deck was the contents of a text box: one deck in `localStorage`,
+kept across a reload, and every deck before it gone. `api/.../library.py` is the
+whole slice, and three decisions carry it.
+
+- **The name is the identity.** Saving under a name the library already holds adds a
+  version to that deck, matched case-insensitively -- someone who typed "shaddoll"
+  today and "Shaddoll" last week meant one deck both times. There is no second
+  "Shaddoll" and no rename-to-fork.
+- **A version is immutable, and content-addressed.** Saving a list identical to the
+  one already on the shelf writes nothing and says so: a version number records a
+  change, not a click. Judged against the *newest* version and only that one, so A,
+  then B, then A again is v1, v2, v3 -- folding the third save back onto v1 would be
+  claiming the deck never went to B and came back.
+- **A saved deck is joined to its Gate result by the decklist itself**, not by a
+  stored pointer. This is the decision the slice is built on. A pointer would have to
+  be written when the job was submitted, which would leave a deck saved *after* its
+  own test with no result, and the same list saved twice with two disconnected
+  histories. Matching on content instead means the ordinary order -- test a deck, like
+  the number, then save it -- works, and it is the order a user will actually use.
+
+That last one is why the library lives in the job database on the job store's
+connection: its central query is a join against `jobs`. Only **test** jobs are
+joined. A refine job also finishes with a win rate, but it is a Screening number
+ADR-0003 forbids quoting, and attaching one to a saved deck would publish the number
+the two fidelities have separate names to keep apart.
+
+Four more things this slice decided:
+
+- **A version carries two content addresses, because two questions are asked of it.**
+  `fingerprint` covers the whole list and decides whether a save is a new version at
+  all. `main_key` covers the main deck alone and is what a Gate result is matched on
+  -- a job carries a main deck and nothing else (`Deck.main`), so a win rate cannot
+  be attributed to an Extra Deck the executor was never handed. Two versions
+  differing only in their Extra Deck therefore share a Gate result, and the
+  comparison screen says as much rather than hiding it. It is also why the deck saved
+  from a finished job saves 40 cards and no Extra Deck, with the caption saying why.
+- **The comparison refuses to call the difference a Delta score.** A Delta score is a
+  win rate difference between a deck and its own mutation under one Environment set,
+  and it is sharp precisely because parent and child share 39 of 40 cards
+  (CONTEXT.md). Two library decks were measured by two separate jobs, so what is on
+  offer is the difference of two *absolute* win rates and the band on it is the two
+  bands added in quadrature -- +/-6.2 points at 500 duels each. Most deck changes are
+  smaller than that. The verdict (`separated`) is drawn as two bars standing on their
+  bands on one scale, so overlapping bands are visible and not only stated.
+- **A fake win rate is never compared with a real one.** Slice 7 swaps `FakeExecutor`
+  for `YgoenvExecutor`, so one library will hold results from both. The comparison
+  refuses that pair outright and names which side was fabricated, because the two
+  differ by however much the fake felt like. Worth knowing today: the fake's win rate
+  is a hash of the decklist, so two decks one card apart land 18 points apart and
+  every comparison in the app currently says "separated". Real duels will not do that.
+- **The shelf refuses nothing the queue would.** Legality gates the queue because an
+  illegal deck kills the worker (#4); a shelf has no worker, and a 32-card deck
+  someone is halfway through building is exactly what a library is for. A 61-card
+  deck saves too. The lengths on the save body bound what a stray paste can write and
+  are not the rulebook.
+
+The diff is `refine.diff_codes` -- the refine job's own counting function, generalised
+from decks to card lists so an Extra Deck can go through it -- and it is drawn by one
+component shared with the duel farm. The library comparing two saved decks and the
+farm comparing a refined deck against the one it was given now agree by construction
+rather than by inspection.
+
+Known gaps, deliberate. **The shelf is shared and unowned**: there is no auth yet
+(slice 8), so the beta's users write to one library and can delete each other's decks.
+**The Baseline comparison is still missing**: the Build gate is "beats the
+Damaged-deck Baseline by >=15 points" (#8), and this slice can compare any two Gate
+results but the API container ships no Damaged deck to compare against. Building one
+needs a shipped Seed deck, which is slice 7's territory. And the library **reloads
+rather than streams**: a finished test job changes what the shelf says without
+anything on the shelf being touched, so the browser re-reads it when the count of
+finished test jobs changes.
 
 ### Slice 4 -- the test job: Gate evaluation vs the Gauntlet
 
@@ -129,8 +213,8 @@ duels, because there is no half of one win rate worth keeping -- but a cancelled
 therefore keeps only its last progress line, not the matchups it did finish. And it
 reports **no Baseline comparison**: the Build gate is "beats the Damaged-deck
 Baseline by >=15 points" (#8), which needs a Damaged deck built from a shipped Seed
-deck the API container does not carry. Slice 5's library is where two Gate results
-get compared.
+deck the API container does not carry. Slice 5's library compares two Gate results
+and is still missing the one deck worth comparing against.
 
 ### Slice 3 -- the refine job, watched while it runs
 
@@ -337,7 +421,7 @@ exact pool, our rules are wrong.
 - `ui/` — Tailwind v4 shell: the `live: false` header badge, the job list with honest queue
   positions, and a job view with progress and the swap log.
 
-119 tests in `api/tests/`, including every slice's manual test.
+145 tests in `api/tests/`, including every slice's manual test.
 
 Running it:
 
@@ -345,7 +429,7 @@ Running it:
 make up          # build and start both containers -> http://localhost:8080
 make down        # stop, keeping every queued and finished job
 make clean       # stop and delete the job database volume
-make test        # the 119 tests, inside the API image
+make test        # the 145 tests, inside the API image
 ```
 
 `make up` publishes the UI on 8080 and the API on 8000; both are overridable

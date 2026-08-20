@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Layers, Radio, Swords } from 'lucide-react'
+import { BookMarked, Layers, Radio, Swords } from 'lucide-react'
 import type { Health } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import type { View } from '@/lib/useRoute'
@@ -8,6 +8,7 @@ const TABS: { view: View; label: string; icon: typeof Layers }[] = [
   { view: 'deck', label: 'Deck', icon: Layers },
   { view: 'farm', label: 'Duel farm', icon: Swords },
   { view: 'replay', label: 'Replays', icon: Radio },
+  { view: 'library', label: 'Library', icon: BookMarked },
 ]
 
 function LiveBadge({ live }: { live: boolean }) {

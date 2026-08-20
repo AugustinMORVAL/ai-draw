@@ -5,11 +5,13 @@ import { CardInspector, FrameLegend } from '@/components/card/CardInspector'
 import { ConstraintPanel } from '@/components/deck/ConstraintPanel'
 import { DeckGrid } from '@/components/deck/DeckGrid'
 import { DeckStatus } from '@/components/deck/DeckStatus'
+import { SaveToLibrary } from '@/components/deck/SaveToLibrary'
 import { Button } from '@/components/ui/Button'
 import type { Card, Constraint, Deck, DeckReport, Health } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { addCopy, copiesOf, downloadYdk, removeCopy, toYdk } from '@/lib/deckText'
 import type { useConstraint } from '@/lib/useConstraint'
+import type { Library } from '@/lib/useLibrary'
 import { usePool } from '@/lib/usePool'
 
 /** A shipped seed deck, so the editor can be tried without owning a `.ydk`. */
@@ -84,6 +86,7 @@ export function DeckEditor({
   parseError,
   health,
   interests,
+  library,
   onSubmit,
   onTest,
   busy,
@@ -96,6 +99,7 @@ export function DeckEditor({
   parseError: string | null
   health: Health | null
   interests: ReturnType<typeof useConstraint>
+  library: Library
   onSubmit: (body: {
     deck?: Deck | null
     mutations: number
@@ -246,11 +250,34 @@ export function DeckEditor({
         />
 
         <div className="grid gap-3 xl:grid-cols-2">
-          <DeckStatus
-            report={report}
-            pending={pending}
-            banlist={health?.banlist ?? '2024.7'}
-          />
+          <div className="space-y-3">
+            <DeckStatus
+              report={report}
+              pending={pending}
+              banlist={health?.banlist ?? '2024.7'}
+            />
+
+            {/* The library is where a deck stops being the contents of this text
+                box. It takes the deck as it stands, legal or not: legality gates
+                the queue, because an illegal deck kills the worker, and a shelf
+                has no worker. */}
+            <div className="border border-edge bg-panel p-3">
+              <h2 className="mb-2 font-display text-xs font-semibold tracking-[0.14em] text-gold">
+                SAVE TO THE LIBRARY
+              </h2>
+              <SaveToLibrary
+                main={report?.deck?.main ?? []}
+                extra={report?.extra ?? []}
+                decks={library.decks}
+                onSave={library.save}
+                hint={
+                  hasDeck && !report.legal
+                    ? 'This deck is not legal, and it is saved anyway: legality gates the queue, not the shelf. A deck halfway through being built is what a library is for.'
+                    : undefined
+                }
+              />
+            </div>
+          </div>
 
           <form
             className="flex flex-col gap-3 border border-edge bg-panel p-3"

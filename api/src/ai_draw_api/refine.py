@@ -14,7 +14,7 @@ only respected the Constraint in its final deck would not be that.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Protocol
 
 from . import constraints
@@ -50,9 +50,15 @@ class Report(Protocol):
 ShouldCancel = Callable[[], Awaitable[bool]]
 
 
-def deck_diff(before: Deck, after: Deck) -> DeckDiff:
-    """Which cards changed between two decks, as copies gained and copies lost."""
-    start, end = Counter(before.main), Counter(after.main)
+def diff_codes(before: Sequence[int], after: Sequence[int]) -> DeckDiff:
+    """Which cards changed between two card lists, as copies gained and lost.
+
+    Lists rather than decks, because the deck library compares Extra Decks with
+    this too and an Extra Deck is not a `Deck` -- a `Deck` is the main deck a job
+    is run on. One counting function, so no second answer to "what changed?" can
+    exist in this app.
+    """
+    start, end = Counter(before), Counter(after)
     added = end - start
     removed = start - end
     return DeckDiff(
@@ -65,6 +71,11 @@ def deck_diff(before: Deck, after: Deck) -> DeckDiff:
         ],
         unchanged=sum((start & end).values()),
     )
+
+
+def deck_diff(before: Deck, after: Deck) -> DeckDiff:
+    """Which cards changed between two decks' main decks."""
+    return diff_codes(before.main, after.main)
 
 
 class Cancelled(Exception):

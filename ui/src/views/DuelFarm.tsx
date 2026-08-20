@@ -1,19 +1,15 @@
-import { ArrowRight, Minus, Play, Plus } from 'lucide-react'
+import { ArrowRight, Play } from 'lucide-react'
 import { CardArt } from '@/components/card/CardArt'
+import { CardChanges } from '@/components/deck/CardChanges'
+import { SaveToLibrary } from '@/components/deck/SaveToLibrary'
 import { Button } from '@/components/ui/Button'
 import { StateBadge } from '@/components/ui/StateBadge'
 import { Matchups } from '@/components/duel/Matchups'
-import type {
-  Card,
-  Constraint,
-  DeckChange,
-  DeckDiff,
-  Job,
-  JobSummary,
-  Swap,
-} from '@/lib/api'
+import type { Card, Constraint, DeckDiff, Job, JobSummary, Swap } from '@/lib/api'
 import { cn } from '@/lib/cn'
+import { countOf } from '@/lib/diff'
 import { useJob } from '@/lib/useJob'
+import type { Library } from '@/lib/useLibrary'
 import { usePool } from '@/lib/usePool'
 
 const pct = (n: number) => `${(n * 100).toFixed(1)}%`
@@ -88,58 +84,6 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   )
 }
 
-/** One side of the diff: the cards that left, or the cards that arrived. */
-function DiffColumn({
-  title,
-  tone,
-  changes,
-  byCode,
-}: {
-  title: string
-  tone: 'out' | 'in'
-  changes: DeckChange[]
-  byCode: Map<number, Card>
-}) {
-  const Icon = tone === 'out' ? Minus : Plus
-  return (
-    <div className="min-w-0 px-3 py-2">
-      <div className="flex items-center gap-1.5">
-        <Icon size={11} className={tone === 'out' ? 'text-bad' : 'text-good'} />
-        <span className="label text-faint">{title}</span>
-        <span className="ml-auto font-mono text-[10px] tabular text-faint">
-          {changes.reduce((n, change) => n + change.count, 0)}
-        </span>
-      </div>
-      <ul className="mt-2 space-y-1.5">
-        {changes.map((change) => {
-          const card = byCode.get(change.card) ?? null
-          return (
-            <li key={change.card} className="flex items-center gap-2">
-              <CardArt
-                card={card}
-                code={change.card}
-                size="thumb"
-                className={cn(
-                  'h-10 w-7 shrink-0 border',
-                  tone === 'out' ? 'border-bad/40 opacity-55' : 'border-good/40',
-                )}
-              />
-              <span className="min-w-0 flex-1 truncate text-[11px] text-muted">
-                {card?.name ?? change.card}
-              </span>
-              {change.count > 1 && (
-                <span className="shrink-0 font-mono text-[10px] tabular text-faint">
-                  x{change.count}
-                </span>
-              )}
-            </li>
-          )
-        })}
-      </ul>
-    </div>
-  )
-}
-
 /**
  * Which cards changed, as cards.
  *
@@ -156,7 +100,7 @@ function Diff({
   byCode: Map<number, Card>
   running: boolean
 }) {
-  const changed = diff.added.reduce((n, change) => n + change.count, 0)
+  const changed = countOf(diff.added)
   return (
     <div className="border border-edge-soft bg-panel-2">
       <header className="flex items-baseline gap-2 border-b border-edge-soft px-3 py-1.5">
@@ -174,10 +118,7 @@ function Diff({
             : 'No mutation beat the deck you sent. It came back as it went in.'}
         </p>
       ) : (
-        <div className="grid grid-cols-2 divide-x divide-edge-soft">
-          <DiffColumn title="Cut" tone="out" changes={diff.removed} byCode={byCode} />
-          <DiffColumn title="Added" tone="in" changes={diff.added} byCode={byCode} />
-        </div>
+        <CardChanges diff={diff} byCode={byCode} />
       )}
     </div>
   )
@@ -236,11 +177,13 @@ function SwapRow({ swap, byCode }: { swap: Swap; byCode: Map<number, Card> }) {
 function JobDetail({
   job,
   byCode,
+  library,
   onCancel,
   onWatch,
 }: {
   job: Job | null
   byCode: Map<number, Card>
+  library: Library
   onCancel: (id: string) => void
   onWatch: (jobId: string) => void
 }) {
@@ -387,6 +330,27 @@ function JobDetail({
             Watch {job.result.replays.length} kept duels
           </Button>
         )}
+
+        {/* The deck this job ended with, put on the shelf. A test job's Gate
+            result finds the version by its decklist, so saving the deck after
+            the job is the ordinary order to do it in. */}
+        {job.result && (
+          <div className="border border-edge-soft bg-panel-2 p-3">
+            <h3 className="label mb-2 text-faint">Save this deck to the library</h3>
+            <SaveToLibrary
+              main={job.result.deck.main}
+              extra={[]}
+              decks={library.decks}
+              onSave={library.save}
+              note={`from ${job.kind} job ${job.id}`}
+              hint={
+                'A job carries a main deck and nothing else, so this saves ' +
+                `${job.result.deck.main.length} cards and no Extra Deck. Save under an ` +
+                'existing name to keep it as the next version of that deck.'
+              }
+            />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -398,6 +362,7 @@ export function DuelFarm({
   onSelect,
   onCancel,
   onWatch,
+  library,
   error,
 }: {
   jobs: JobSummary[]
@@ -405,6 +370,7 @@ export function DuelFarm({
   onSelect: (id: string) => void
   onCancel: (id: string) => void
   onWatch: (jobId: string) => void
+  library: Library
   error: string | null
 }) {
   const { byCode } = usePool()
@@ -472,6 +438,7 @@ export function DuelFarm({
         <JobDetail
           job={watched.job}
           byCode={byCode}
+          library={library}
           onCancel={onCancel}
           onWatch={onWatch}
         />

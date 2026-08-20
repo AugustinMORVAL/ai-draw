@@ -576,3 +576,162 @@ class DuelReplay(DuelReplaySummary):
     """A duel with its full action log."""
 
     log: list[DuelEvent] = []
+
+
+class DeckSave(BaseModel):
+    """Save a decklist to the library, under a name.
+
+    The name is the identity: saving under a name the library already holds adds a
+    version to that deck rather than making a second deck with the same label.
+
+    The shelf refuses nothing. Legality gates the *queue*, because an illegal deck
+    kills the worker (#4); a shelf has no worker, and a 32-card deck someone is
+    halfway through building is exactly what a library is for. So a deck over the
+    60-card ceiling saves too -- the two lengths here bound the payload a stray
+    paste can write, and are not the rulebook.
+    """
+
+    name: str = Field(min_length=1, max_length=64)
+    main: list[int] = Field(default_factory=list, max_length=200)
+    extra: list[int] = Field(default_factory=list, max_length=60)
+    #: Where this version came from, when the caller knows: "refine job 4f2a1c".
+    note: str | None = Field(default=None, max_length=200)
+
+
+class GateSnapshot(BaseModel):
+    """A Gate result the library found by matching decklists, not by a pointer.
+
+    A pointer would have to be written when the job was submitted, which would mean
+    a deck saved *after* its test had no result, and the same list saved twice had
+    two disconnected histories. The link is the decklist itself.
+
+    Only Gate results appear here. A refine job's Screening number is refinement
+    progress and ADR-0003 forbids quoting it, so the library never attaches one to
+    a saved deck as though it measured it.
+    """
+
+    job_id: str
+    win_rate: float
+    duels: int
+    fidelity: Fidelity = Fidelity.GATE
+    #: Whether real duels produced it. A fake number and a real one are not
+    #: comparable, which is the one thing this flag is load-bearing for here.
+    live: bool
+    finished_at: float
+
+    @computed_field
+    @property
+    def margin(self) -> float:
+        """The 95% band. Quoting the number means quoting this."""
+        return wald_margin(round(self.win_rate * self.duels), self.duels)
+
+
+class DeckVersion(BaseModel):
+    """One saved decklist, immutable once written.
+
+    Two content addresses, because two different questions are asked of a version.
+    `fingerprint` covers the whole list and decides whether a save is a new version
+    at all. `main_key` covers the main deck alone and is what a Gate result is
+    matched on -- a job carries a main deck and nothing else (`Deck.main`), so a
+    Gate win rate is a statement about 40 to 60 cards and cannot be attributed to
+    an Extra Deck the executor was never handed.
+    """
+
+    version: int
+    fingerprint: str
+    main_key: str
+    main: list[int]
+    extra: list[int]
+    note: str | None = None
+    created_at: float
+    #: The most recent Gate evaluation of this main deck, if any deck was ever
+    #: tested with exactly these cards. Found by `main_key`, never stored.
+    gate: GateSnapshot | None = None
+
+    @computed_field
+    @property
+    def main_count(self) -> int:
+        return len(self.main)
+
+    @computed_field
+    @property
+    def extra_count(self) -> int:
+        return len(self.extra)
+
+
+class LibraryDeck(BaseModel):
+    """A named deck and every version of it, newest first."""
+
+    id: str
+    name: str
+    created_at: float
+    versions: list[DeckVersion] = []
+
+
+class DeckSaved(BaseModel):
+    """The answer to a save: the deck, and whether anything was actually written.
+
+    `created` is false when the list is identical to the version already on the
+    shelf. A version number is a record of a change, not a count of clicks, so
+    saving an untouched deck twice leaves one version behind.
+    """
+
+    deck: LibraryDeck
+    version: int
+    created: bool
+    reason: str
+
+
+class DeckRef(BaseModel):
+    """One side of a comparison: which deck, which version."""
+
+    deck_id: str
+    version: int
+
+
+class CompareDecks(BaseModel):
+    left: DeckRef
+    right: DeckRef
+
+
+class ComparisonSide(BaseModel):
+    deck_id: str
+    name: str
+    version: DeckVersion
+
+
+class GateComparison(BaseModel):
+    """Two Gate win rates, and whether their bands leave them apart.
+
+    Not a Delta score. The Delta score is valid only between a parent deck and its
+    mutation under one Environment set (CONTEXT.md); two library decks were
+    measured by two separate jobs, so what is on offer is the difference of two
+    *absolute* win rates, each carrying its own band. `separated` is the honest
+    verdict on it: below the combined band, these two numbers do not tell the two
+    decks apart, however far apart the digits look.
+    """
+
+    difference: float
+    #: The two bands added in quadrature: what the difference itself is worth.
+    margin: float
+    separated: bool
+    reason: str
+
+
+class DeckComparison(BaseModel):
+    """Two saved versions, what changed between them, and how they measured.
+
+    `diff` is produced by the same function that draws a refine job's diff, so the
+    library and the duel farm cannot disagree about which cards moved.
+    """
+
+    left: ComparisonSide
+    right: ComparisonSide
+    #: Main deck, left to right. `added` is what the right-hand deck holds and the
+    #: left-hand one does not.
+    diff: DeckDiff = DeckDiff()
+    extra_diff: DeckDiff = DeckDiff()
+    #: Present only when both sides carry a Gate result that may be compared.
+    gate: GateComparison | None = None
+    #: Always said, including when `gate` is None -- especially then.
+    gate_note: str = ""

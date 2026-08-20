@@ -272,6 +272,97 @@ export interface DuelReplay extends DuelReplaySummary {
   log: DuelEvent[]
 }
 
+/**
+ * A Gate result the library found by matching decklists, not by a pointer.
+ *
+ * A pointer would have to be written when the job was submitted, so a deck saved
+ * after its own test would have no result. The link is the decklist itself.
+ */
+export interface GateSnapshot {
+  job_id: string
+  win_rate: number
+  duels: number
+  fidelity: Fidelity
+  /** Whether real duels produced it. A fake number and a real one never compare. */
+  live: boolean
+  finished_at: number
+  margin: number
+}
+
+/**
+ * One saved decklist, immutable once written.
+ *
+ * Two content addresses, two questions. `fingerprint` covers the whole list and
+ * decides whether a save is a new version at all; `main_key` covers the main deck
+ * alone and is what a Gate result is matched on, because a job carries a main deck
+ * and nothing else.
+ */
+export interface DeckVersion {
+  version: number
+  fingerprint: string
+  main_key: string
+  main: number[]
+  extra: number[]
+  note: string | null
+  created_at: number
+  /** The last Gate evaluation of this main deck, if any deck ever was. */
+  gate: GateSnapshot | null
+  main_count: number
+  extra_count: number
+}
+
+export interface LibraryDeck {
+  id: string
+  name: string
+  created_at: number
+  /** Newest first. */
+  versions: DeckVersion[]
+}
+
+export interface DeckSaved {
+  deck: LibraryDeck
+  version: number
+  /** False when the list was identical to the version already on the shelf. */
+  created: boolean
+  reason: string
+}
+
+export interface DeckRef {
+  deck_id: string
+  version: number
+}
+
+export interface ComparisonSide {
+  deck_id: string
+  name: string
+  version: DeckVersion
+}
+
+/**
+ * Two Gate win rates, and whether they tell the two decks apart.
+ *
+ * Not a Delta score: that is a win rate difference between a deck and its own
+ * mutation under one Environment set. These are two separate jobs, so the bands
+ * add, and `separated` is the honest verdict on the difference.
+ */
+export interface GateComparison {
+  difference: number
+  margin: number
+  separated: boolean
+  reason: string
+}
+
+export interface DeckComparison {
+  left: ComparisonSide
+  right: ComparisonSide
+  /** Main deck, left to right. Drawn by the same code as a refine job's diff. */
+  diff: DeckDiff
+  extra_diff: DeckDiff
+  gate: GateComparison | null
+  /** Always said, including when there is no comparison — especially then. */
+  gate_note: string
+}
+
 export interface Progress {
   step: number
   total: number
@@ -427,6 +518,28 @@ export const api = {
       body: JSON.stringify({ constraint, seed: seed ?? null }),
     }),
   cancel: (id: string) => request<Job>(`/jobs/${id}/cancel`, { method: 'POST' }),
+  /** Every saved deck and every version, with the Gate result each one carries. */
+  library: () => request<LibraryDeck[]>('/library'),
+  /** Save under a name. The name is the identity: an existing one gets a version. */
+  saveDeck: (body: {
+    name: string
+    main: number[]
+    extra: number[]
+    note?: string | null
+  }) =>
+    request<DeckSaved>('/library/decks', {
+      method: 'POST',
+      body: JSON.stringify({ ...body, note: body.note ?? null }),
+    }),
+  deleteDeck: (id: string) =>
+    request<void>(`/library/decks/${id}`, { method: 'DELETE' }),
+  /** The diff and the Gate verdict, both answered server-side so one exists. */
+  compareDecks: (left: DeckRef, right: DeckRef) =>
+    request<DeckComparison>('/library/compare', {
+      method: 'POST',
+      body: JSON.stringify({ left, right }),
+    }),
+
   replays: (jobId: string) => request<DuelReplaySummary[]>(`/jobs/${jobId}/replays`),
   replay: (jobId: string, index: number) =>
     request<DuelReplay>(`/jobs/${jobId}/replays/${index}`),
