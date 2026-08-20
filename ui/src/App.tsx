@@ -115,7 +115,7 @@ export default function App() {
           selectedId={route.jobId}
           onSelect={(id) => go({ jobId: id, replay: null })}
           onCancel={cancel}
-          onWatch={(jobId) => go({ view: 'replay', jobId, replay: 0 })}
+          onWatch={(jobId, replay) => go({ view: 'replay', jobId, replay })}
           library={library}
           error={error}
         />

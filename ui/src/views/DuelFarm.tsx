@@ -185,7 +185,7 @@ function JobDetail({
   byCode: Map<number, Card>
   library: Library
   onCancel: (id: string) => void
-  onWatch: (jobId: string) => void
+  onWatch: (jobId: string, replay: number) => void
 }) {
   if (!job) {
     return (
@@ -286,7 +286,12 @@ function JobDetail({
           </p>
         )}
 
-        {gate && <Matchups result={gate} />}
+        {gate && (
+          <Matchups
+            result={gate}
+            onWatch={(index) => onWatch(job.id, index)}
+          />
+        )}
 
         {progress && (
           <>
@@ -323,11 +328,12 @@ function JobDetail({
         )}
 
         {/* Both kinds keep the same sample, for the same reason: a win rate is
-            worth more watched than read. */}
+            worth more watched than read. One duel per Gauntlet deck, so a test
+            job's breakdown has no row that cannot be opened. */}
         {job.result && job.result.replays.length > 0 && (
-          <Button className="w-full" onClick={() => onWatch(job.id)}>
+          <Button className="w-full" onClick={() => onWatch(job.id, 0)}>
             <Play size={12} />
-            Watch {job.result.replays.length} kept duels
+            Watch {job.result.replays.length} kept duels, one per Gauntlet deck
           </Button>
         )}
 
@@ -369,7 +375,7 @@ export function DuelFarm({
   selectedId: string | null
   onSelect: (id: string) => void
   onCancel: (id: string) => void
-  onWatch: (jobId: string) => void
+  onWatch: (jobId: string, replay: number) => void
   library: Library
   error: string | null
 }) {

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from ai_draw_api.constraints import random_deck
-from ai_draw_api.executor import GAUNTLET, FakeExecutor, _shares
+from ai_draw_api.executor import GAUNTLET, REPLAY_SAMPLE, FakeExecutor, _shares
 from ai_draw_api.gate import run_test
 from ai_draw_api.models import (
     Deck,
@@ -206,8 +206,13 @@ async def test_run_a_test_and_get_a_win_rate_with_its_matchups(client):
     )
     assert all(row["opponent"] for row in matchups)
 
+    # Every row in the breakdown has a duel behind it: the sample is one duel per
+    # Gauntlet deck, so a matchup a user wants to look at can always be opened.
     watchable = (await client.get(f"/api/jobs/{job['id']}/replays")).json()
-    assert len(watchable) == 6, "the same sample a refine job keeps"
+    assert len(watchable) == REPLAY_SAMPLE, "the same sample a refine job keeps"
+    assert [replay["opponent"] for replay in watchable] == [
+        row["opponent"] for row in matchups
+    ]
 
 
 async def test_a_gate_evaluation_cannot_be_run_at_screening_size(client):

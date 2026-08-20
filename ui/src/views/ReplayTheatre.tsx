@@ -154,8 +154,9 @@ export function ReplayTheatre({
             NO DUELS TO WATCH YET
           </h2>
           <p className="text-[11.5px] leading-relaxed text-muted">
-            A refine job keeps a sample of the duels its final deck played. Send a deck
-            to the duel farm and the kept duels turn up here when it finishes.
+            A job keeps one duel against each Gauntlet deck — the refine job's duels
+            are its final deck's, the test job's are the ones behind the win rate.
+            Send a deck to the duel farm and they turn up here when it finishes.
           </p>
         </div>
       </div>
@@ -170,6 +171,11 @@ export function ReplayTheatre({
             <h2 className="font-display text-xs font-semibold tracking-[0.14em] text-gold">
               KEPT DUELS
             </h2>
+            {/* One duel per Gauntlet deck, in the Gauntlet's fixed order: a sample
+                that skipped opponents would leave matchup rows nobody could open. */}
+            <p className="mt-0.5 text-[10px] text-faint">
+              one per Gauntlet deck, in the fixed order
+            </p>
           </header>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {watchable.map((job) => (
@@ -279,10 +285,11 @@ export function ReplayTheatre({
 
             {!replay.live && (
               <p className="border-l-2 border-l-warn bg-warn/8 px-3 py-2 text-[11px] leading-relaxed text-warn">
-                This duel did not happen. The fake executor wrote the log from the
-                deck's own cards so the viewer has something real to render, and the
-                board below is that log drawn out. Real logs arrive with the ygoenv
-                executor.
+                This duel did not happen. The fake executor wrote the log, each seat
+                playing out of its own deck — your cards against {replay.opponent}'s
+                shipped decklist — so the board above is a board these two decks
+                could produce, and nothing more than that. Real logs arrive with the
+                ygoenv executor.
               </p>
             )}
           </>

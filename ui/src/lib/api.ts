@@ -198,7 +198,8 @@ export interface RefineResult {
   win_rate: number
   fidelity: Fidelity
   live: boolean
-  /** A sample of the final deck's duels, not all of them. */
+  /** One duel against each Gauntlet deck, kept from the final deck's. Summaries:
+      the job endpoint strips the logs, and `api.replay` fetches one. */
   replays: DuelReplaySummary[]
 }
 
@@ -236,6 +237,7 @@ export interface GateResult {
   /** The 95% band on the headline. Quoting the number means quoting this. */
   margin: number
   live: boolean
+  /** One duel per matchup row, so every row in the breakdown can be opened. */
   replays: DuelReplaySummary[]
 }
 
@@ -413,8 +415,9 @@ export interface Job {
 /**
  * A job as the queue list shows it: where it stands, and nothing it carries.
  *
- * The list is polled while a job runs and a refine result holds six full duel
- * logs, so the list says how far each job got and `api.job(id)` says what it did.
+ * The list is polled while a job runs, so it says how far each job got and
+ * `api.job(id)` says what it did. Neither carries a duel log: `api.job(id)` names
+ * the duels a job kept and `api.replay(id, i)` is the one way to read one.
  */
 export interface JobSummary {
   id: string

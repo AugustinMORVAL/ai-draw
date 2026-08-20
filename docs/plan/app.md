@@ -33,7 +33,7 @@ Each slice is done when its manual test passes by hand in a browser. Estimates a
 | 3 ✓ | Refine job: submit, queue position, live progress, result | Submit a deck, watch swap-by-swap progress, see the final diff and which cards changed | #6, #7 | 2 |
 | 4 ✓ | Test job: Gate evaluation vs the Gauntlet | Run a test, get a win rate with its matchup breakdown, labelled Gate fidelity | #3, #8 | 1.5 |
 | 5 ✓ | Deck library: save, name, version, compare | Save two decks, diff them, see each one's last Gate result | - | 1.5 |
-| 6 ~ | Duel replay: watch one duel the deck played | Open a duel from a refine result, step through the action log | #3 | 2 |
+| 6 ✓ | Duel replay: watch one duel the deck played | Open a duel from a refine result, step through the action log | #3 | 2 |
 | 7 | Real executor: swap `FakeExecutor` for `YgoenvExecutor` | Every slice above still passes its manual test, now against real duels | #3 | 1.5 |
 | 8 | Beta hardening: shared-key access, rate limit, queue fairness | Two users submit at once; both see honest queue positions | - | 1 |
 
@@ -74,7 +74,78 @@ behind each phase.
 
 ## Status
 
-**Slices 0 to 5 are done. Slice 6 is done against the fake executor.**
+**Slices 0 to 6 are done, all of them against the fake executor. Slice 7 is the join.**
+
+### Slice 6 -- duel replay: watch one duel the deck played
+
+The manual test passes: a finished job's matchup row opens the duel behind it, and the
+mat, the life bars and the action log step through it together.
+
+`DuelExecutor` grew one method, `replays(deck, count)`, and both jobs keep its answer
+in their result. The viewer was built with the deck editor -- the mat, the life bars,
+the transport and the log all read from one index into the log, so they cannot
+disagree -- and what this slice added is the *content* of a fabricated duel, because
+the log is the one screen in the app a user reads card by card. Three things in it
+were false, and each was visible on screen:
+
+- **The opponent played the candidate's deck.** A duel labelled Sky Striker Ace
+  summoning Shaddoll Dragon is a fabrication in the place a fabrication shows. The
+  ten Gauntlet decklists now ship as data -- `data/pilot-864/gauntlet.json`, written
+  by `tools/gen_gauntlet.py` out of the shipped `.ydk` files -- and each seat plays
+  out of its own main deck. Every card in all ten is inside the 864, so the mat can
+  draw the opponent's board with the same index it draws yours; the generator fails
+  if that ever stops being true, because then the pool and the Gauntlet would be
+  describing different phases.
+- **The sample skipped opponents.** Six duels with the opponent picked by hash meant
+  two duels against Centur-Ion, none against half the Gauntlet, and a test job whose
+  breakdown had ten rows and six that could be opened. `REPLAY_SAMPLE` is
+  `len(GAUNTLET)` now: one duel per Gauntlet deck, in the fixed order, half of them
+  on the play (ADR-0004 forces the seat 50/50 across a batch, and this sample is the
+  batch). So every matchup row is a link, and the row is where a user clicks --
+  fifty duels summarised as one number is honest and is still a number.
+- **The log's sentences did not match its cards.** "Special Summons Super
+  Polymerization" is a line no duel produces, and a Spell cannot swing for 1300.
+  The verb now comes from the card's own type and an attack is made by a monster the
+  seat summoned face-up earlier in the log -- which is what the mat highlights when
+  the battle phase comes round.
+
+Two more decisions:
+
+- **The kept duels agree with the number beside them.** One function
+  (`_matchup_rates`) fabricates the per-opponent rates for the breakdown *and* for
+  the replay sample, the candidate wins `round(count * win_rate)` of the duels, and
+  they are its best matchups. A deck that lost the duel it is 80% into while winning
+  the one it is 20% into would teach a user to distrust the breakdown, which is the
+  one screen in this app whose numbers may be quoted.
+- **A duel log has exactly one endpoint.** `GET /api/jobs/{id}` says which duels a
+  job kept and strips their logs; `GET /api/jobs/{id}/replays/{index}` is the only
+  way to read one. The job detail is what the browser polls, so ten logs on it would
+  be ten logs every 700 ms for a result nobody had opened. A job that has not
+  finished answers 409, not an empty list.
+
+`GET /api/pool` returns all 864 cards in one response, so the editor and the mat
+resolve a card locally instead of asking the server per keystroke or per event. Cards
+*outside* the pool stay a server question: `/api/cards?q=` still answers it, and still
+answers with the card marked rather than missing.
+
+Known gaps, deliberate. **The duels are fabricated** and say so on every replay
+(`live: false`) and in a banner over the mat naming both decks; `YgoenvExecutor`
+implements the same method against real duels in slice 7. **A refine job's sample is
+of its final deck only** -- watching the deck that was submitted would mean keeping a
+second set of logs to answer a question the diff already answers. And the fake's
+duels are the shape of a duel rather than a game of Yu-Gi-Oh: no chains, no
+responses, one summon a turn, and life points that only fall. Nothing above the seam
+reads them for anything but drawing, so a real log can replace them without the
+viewer changing.
+
+### One bug the replay work found
+
+**A four-digit passcode could not be pasted.** `_CODE` in `decklist.py` required five
+to nine digits, and "Labrynth Cooclock" is code `2511`. A `.ydk` carrying it came back
+one card short, with "no card is named '2511'" against it -- and Labrynth is one of the
+33 decks the executor ships with. The floor is gone. It also made
+`test_the_random_deck_the_app_submits_is_legal` fail about one run in twelve, which is
+how it surfaced.
 
 ### Slice 5 -- the deck library: save, name, version, compare
 
@@ -246,13 +317,14 @@ Four more things this slice decided:
   things they are.
 - **A result supersedes the checkpoint that built it**; a cancelled or failed job
   keeps its checkpoint, because that is the only record of the work that did happen.
-- **`GET /api/jobs` is summaries now.** It is polled every 700 ms and a refine result
-  holds six full duel logs, so the list carries where each job stands and nothing it
+- **`GET /api/jobs` is summaries now.** It is polled every 700 ms and a result holds a
+  duel log per Gauntlet deck, so the list carries where each job stands and nothing it
   carries; `GET /api/jobs/{id}` carries the params, the checkpoint and the result,
   and is polled only for the one job on screen -- and stops the moment that job is
-  finished. The replay picker still knows which jobs are watchable because the kept
-  duels are counted in SQL (`json_array_length`), so no log crosses the wire to draw
-  a list of ids.
+  finished. Neither carries a log: slice 6 strips them off the job detail too, so a
+  log has one endpoint. The replay picker still knows which jobs are watchable because
+  the kept duels are counted in SQL (`json_array_length`), so no log crosses the wire
+  to draw a list of ids.
 - **The job database migrates in place.** `make down` keeps the volume on purpose,
   so the file a user has is older than the code reading it, and
   `CREATE TABLE IF NOT EXISTS` will not add a column to a table that exists. A
@@ -347,33 +419,6 @@ Two things carry the look, and both are honest about where they come from:
 
 Fonts are self-hosted in `ui/public/fonts` (92 KB), so the container needs no CDN.
 
-### Slice 6 -- duel replay, on the fake executor
-
-`DuelExecutor` grew one method, `replays(deck, count)`, and `FakeExecutor` implements
-it by writing a duel log out of the deck's own cards: real passcodes, real Gauntlet
-opponent names, life points that only fall and that reach zero on the turn the winner
-takes. It is fabricated, it says so on every replay (`live: false`) and in a banner
-above the mat, and `YgoenvExecutor` will implement the same method against real duels.
-
-- A refine job keeps `REPLAY_SAMPLE = 6` duels of its *final* deck, in its result.
-  Sampled, never complete: a refine job screens thousands and storing every log would
-  dwarf the job database.
-- `GET /api/jobs/{id}/replays` lists them without logs; `/{index}` returns one with
-  its log. A job that has not finished answers 409, not an empty list.
-- `GET /api/pool` returns all 864 cards in one response, so the editor filters
-  locally instead of asking the server on every keystroke. Cards *outside* the pool
-  stay a server question: `/api/cards?q=` still answers it, and still answers with the
-  card marked rather than missing.
-
-### One bug this slice found
-
-**A four-digit passcode could not be pasted.** `_CODE` in `decklist.py` required five
-to nine digits, and "Labrynth Cooclock" is code `2511`. A `.ydk` carrying it came back
-one card short, with "no card is named '2511'" against it -- and Labrynth is one of the
-33 decks the executor ships with. The floor is gone. It also made
-`test_the_random_deck_the_app_submits_is_legal` fail about one run in twelve, which is
-how it surfaced.
-
 ### Slice 1 — deck input, legality, Masking preview
 
 The manual test passes: pasting a deck with 4 copies of a card and an out-of-pool card
@@ -421,7 +466,7 @@ exact pool, our rules are wrong.
 - `ui/` — Tailwind v4 shell: the `live: false` header badge, the job list with honest queue
   positions, and a job view with progress and the swap log.
 
-145 tests in `api/tests/`, including every slice's manual test.
+151 tests in `api/tests/`, including every slice's manual test.
 
 Running it:
 
@@ -429,7 +474,7 @@ Running it:
 make up          # build and start both containers -> http://localhost:8080
 make down        # stop, keeping every queued and finished job
 make clean       # stop and delete the job database volume
-make test        # the 145 tests, inside the API image
+make test        # the 151 tests, inside the API image
 ```
 
 `make up` publishes the UI on 8080 and the API on 8000; both are overridable
@@ -454,7 +499,9 @@ Known gaps, deliberately left for later slices:
 - **Side decks are parsed and then dropped.** Phase 1 has no use for one.
 - **No auth.** Slice 8.
 
-`data/pilot-864/cards.json` is committed, so nothing above needs the network.
-`python tools/gen_card_index.py --check` re-derives it from its two pinned sources and
-fails if the committed copy is stale; it downloads them, so it is not part of the test
-run.
+`data/pilot-864/cards.json` and `gauntlet.json` are committed, so nothing above needs
+the network or the `vendor/ygo-agent` submodule. `python tools/gen_card_index.py
+--check` re-derives the card index from its two pinned sources and fails if the
+committed copy is stale; it downloads them, so it is not part of the test run.
+`python tools/gen_gauntlet.py --check` does the same for the ten Gauntlet decklists
+and needs only the submodule.

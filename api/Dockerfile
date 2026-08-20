@@ -22,6 +22,7 @@ COPY api/tests ./api/tests
 # Paths are stated, not inferred from where the package happens to sit.
 ENV AI_DRAW_POOL=/srv/data/pilot-864/pool.txt \
     AI_DRAW_CARDS=/srv/data/pilot-864/cards.json \
+    AI_DRAW_GAUNTLET=/srv/data/pilot-864/gauntlet.json \
     AI_DRAW_DB=/var/lib/ai-draw/jobs.db
 
 # The job database is the one thing that must outlive the container (ADR-0005).

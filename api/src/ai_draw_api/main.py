@@ -104,6 +104,23 @@ def _deck_to_run(
     return deck
 
 
+def _without_logs(job: Job) -> Job:
+    """One job, with its kept duels cut down to summaries.
+
+    A duel log has exactly one way out of the API -- `/api/jobs/{id}/replays/{i}` --
+    and this is the response the browser polls, so the ten logs a finished job keeps
+    would be ten logs every 700 ms until the tab moved on. Which duels were kept
+    stays here, because that is what the "watch" button is drawn from.
+    """
+    if not job.result or not job.result.get("replays"):
+        return job
+    summaries = [
+        {key: value for key, value in replay.items() if key != "log"}
+        for replay in job.result["replays"]
+    ]
+    return job.model_copy(update={"result": {**job.result, "replays": summaries}})
+
+
 def create_app(
     *, store: JobStore | None = None, executor: DuelExecutor | None = None
 ) -> FastAPI:
@@ -263,7 +280,7 @@ def create_app(
         job = await store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="no such job")
-        return job
+        return _without_logs(job)
 
     async def _replays_of(job_id: str) -> list[dict]:
         """The duel logs a finished job kept. 404 if the job never got that far."""

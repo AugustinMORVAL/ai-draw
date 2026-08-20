@@ -1,25 +1,58 @@
-import type { GateResult, Matchup } from '@/lib/api'
+import { Play } from 'lucide-react'
+import type { DuelReplaySummary, GateResult, Matchup } from '@/lib/api'
 import { cn } from '@/lib/cn'
 
 const pct = (n: number, digits = 1) => `${(n * 100).toFixed(digits)}%`
 const band = (n: number) => `±${(n * 100).toFixed(1)}`
 
 /**
- * One matchup, drawn against the 50% line.
+ * One matchup, drawn against the 50% line, and openable.
  *
  * The bar grows from the middle, not from the left: what a reader wants from a
  * matchup row is which side of even it fell on and by how far, and a bar anchored
  * at zero makes 48% and 52% look like the same number.
+ *
+ * The row is a button because the job kept a duel against this opponent. Fifty
+ * duels reported as one number is the honest summary and it is still a number; the
+ * duel behind it is the only thing on this screen a user can actually look at, so
+ * the row that names the opponent is the place to click.
  */
-function MatchupRow({ row }: { row: Matchup }) {
+function MatchupRow({
+  row,
+  replay,
+  onWatch,
+}: {
+  row: Matchup
+  replay: DuelReplaySummary | undefined
+  onWatch: (index: number) => void
+}) {
   const edge = row.win_rate - 0.5
   const width = Math.min(Math.abs(edge) * 2, 1) * 50
   const second = row.duels - row.first_duels
   return (
-    <li className="grid grid-cols-[8.5rem_minmax(0,1fr)_4.5rem] items-center gap-2 px-2.5 py-1.5">
-      <span className="truncate text-[11px] text-muted" title={row.opponent}>
-        {row.opponent}
-      </span>
+    <li
+      className={cn(
+        'grid grid-cols-[8.5rem_minmax(0,1fr)_4.5rem] items-center gap-2 px-2.5 py-1.5',
+        replay && 'transition-colors hover:bg-panel',
+      )}
+    >
+      {replay ? (
+        <button
+          type="button"
+          onClick={() => onWatch(replay.index)}
+          className="flex min-w-0 items-center gap-1.5 text-left"
+          title={`Watch the kept duel against ${row.opponent}`}
+        >
+          <Play size={9} className="shrink-0 text-faint" />
+          <span className="truncate text-[11px] text-muted underline decoration-edge decoration-dotted underline-offset-2">
+            {row.opponent}
+          </span>
+        </button>
+      ) : (
+        <span className="truncate text-[11px] text-muted" title={row.opponent}>
+          {row.opponent}
+        </span>
+      )}
 
       <span className="relative flex h-4 items-center">
         <span className="absolute inset-y-0 left-1/2 w-px bg-edge" />
@@ -65,7 +98,15 @@ function MatchupRow({ row }: { row: Matchup }) {
  * fixed within a phase precisely so two decks' rows line up (CONTEXT.md), and
  * re-sorting per deck would throw that away for a nicer-looking column.
  */
-export function Matchups({ result }: { result: GateResult }) {
+export function Matchups({
+  result,
+  onWatch,
+}: {
+  result: GateResult
+  onWatch: (index: number) => void
+}) {
+  // One kept duel per opponent, so a row and a replay find each other by name.
+  const byOpponent = new Map(result.replays.map((replay) => [replay.opponent, replay]))
   const worst = result.matchups.reduce(
     (low, row) => (row.win_rate < low.win_rate ? row : low),
     result.matchups[0],
@@ -122,7 +163,12 @@ export function Matchups({ result }: { result: GateResult }) {
         </header>
         <ul className="divide-y divide-edge-soft">
           {result.matchups.map((row) => (
-            <MatchupRow key={row.opponent} row={row} />
+            <MatchupRow
+              key={row.opponent}
+              row={row}
+              replay={byOpponent.get(row.opponent)}
+              onWatch={onWatch}
+            />
           ))}
         </ul>
       </div>
@@ -133,6 +179,12 @@ export function Matchups({ result }: { result: GateResult }) {
         paired duels. A single row is only {perOpponent} of them and carries a{' '}
         {band(result.matchups[0]?.margin ?? 0)} band of its own, so read the
         ordering rather than the digits.
+        {byOpponent.size > 0 && (
+          <>
+            {' '}
+            Each row kept one of its duels: click the opponent to watch it.
+          </>
+        )}
       </p>
     </div>
   )
